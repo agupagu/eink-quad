@@ -85,7 +85,7 @@ with sync_playwright() as p:
     page.wait_for_function('document.querySelector("#status").innerText.includes("last display retained")')
     checks.append('offline API reload recovers IndexedDB frame')
     page.unroute('**/api/tablet/**')
-    page.evaluate('''window.fetch=(_url,options)=>new Promise((_resolve,reject)=>{options.signal.addEventListener('abort',()=>reject(new DOMException('Injected stalled request','AbortError')),{once:true});});''')
+    page.evaluate('''()=>{window.fetch=(_url,options)=>new Promise((_resolve,reject)=>{options.signal.addEventListener('abort',()=>reject(new DOMException('Injected stalled request','AbortError')),{once:true});});}''')
     page.locator('#reload').click()
     page.wait_for_function('document.querySelector("#status").innerText.includes("timed out")',timeout=15000)
     assert page.locator('.frame').count()==1

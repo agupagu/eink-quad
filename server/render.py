@@ -417,7 +417,6 @@ def _psi_card(ctx, size, full=False):
         text(d, (4, 180), "0–50 Good · 51–100 Moderate · 101–200 Unhealthy", F("cm", 13))
         text(d, (4, 195), "201–300 Very unhealthy · >300 Hazardous", F("cm", 13))
     else:
-        text(d, (w - 4, 3), "diagram", F("cm", 9), anchor="ra")
         c.paste(_psi_map(reading, (w - 8, 58)), (4, 20))
         stamp = _psi_stamp(reading, ctx.now)
         f = fit_font(d, stamp, "csb", w - 8, (12, 11, 10))

@@ -2,9 +2,10 @@
 
 ## Singapore tablet fork
 
-This fork keeps the original four corners and **all four detail screens**
-(weather, news & markets, sports, sky). The sports screen now follows
-**Manchester United, India men's cricket, Formula 1 and Cal Bears football**.
+This fork retains the original e-ink weather/news/sports/sky renderer at
+`/tablet/legacy`, but the **default iPad Home** is now a native-resolution 2×2
+sports grid: Manchester United, India men, F1 and Cal Bears each get a full
+quadrant. Tap a quadrant for its own detail screen; swipe between sports.
 Manchester United and Cal use ESPN's team schedules; F1 uses ESPN's season
 calendar; India uses ESPN Cricinfo's *active series* header. When India has no
 match in that active feed, it says so rather than displaying a made-up fixture.
@@ -18,12 +19,13 @@ if you want useful plane-overhead data. The optional LLM brief is off by default
 Python server as below. If it is bound to a Tailscale IP, open
 `http://<tailscale-ip>:8740/tablet` on a device connected to the same tailnet.
 For a non-Tailscale bind, set a distinct `QUAD_TABLET_TOKEN` and open
-`http://<your-server>/tablet?k=<QUAD_TABLET_TOKEN>`. The read-only viewer
-has Home plus four touch-selectable detail screens; it preloads and swaps
-frames in place every 15 seconds without flashing the browser. Landscape is
-best on an iPad; Add to Home Screen gives app-like fullscreen mode. Swipe the
-screen or use the bottom tabs. The server continues to render pixels with Pillow at the
-original 800×480, scaled to fit your tablet. Keep the server behind Tailscale,
+`http://<your-server>/tablet?k=<QUAD_TABLET_TOKEN>`. The iPad viewer shows
+four sports quadrants and opens a dedicated detail screen on tap. It uses
+native HTML rather than scaling the 800×480 e-paper image; keyed text updates
+avoid tearing down the cards during each 30-second data refresh. For the
+original four-topic e-paper layout, open `/tablet/legacy`.
+Landscape is best on an iPad; Add to Home Screen gives app-like fullscreen
+mode. The original server still renders e-paper pixels with Pillow. Keep the server behind Tailscale,
 HTTPS, or another private network, and change all example tokens before
 exposing it. Set `QUAD_TABLET_TOKEN` separately from `QUAD_TOKEN` and
 `QUAD_ADMIN`: the tablet token only grants image access. Do **not** put an

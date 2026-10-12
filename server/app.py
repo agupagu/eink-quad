@@ -50,6 +50,7 @@ NOTES_DB = os.environ.get("QUAD_NOTES_DB", "")           # the note box's sqlite
 NOTEBOX_DIR = os.environ.get("QUAD_NOTEBOX_DIR", "")     # to borrow its renderer
 DASH_HTML = os.path.join(HERE, "web", "dashboard.html")
 TABLET_HTML = os.path.join(HERE, "web", "tablet.html")
+IPAD_HTML = os.path.join(HERE, "web", "ipad.html")
 
 DEFAULTS = {
     "label": "Home",
@@ -529,7 +530,7 @@ class H(BaseHTTPRequestHandler):
                 return self.device_poll()
             if p == "/healthz":
                 return self.send(200, "ok", "text/plain")
-            if p in ("/tablet", "/api/tablet/frame"):
+            if p in ("/tablet", "/tablet/legacy", "/api/tablet/frame", "/api/tablet/sports"):
                 # Read-only screen on a Tailnet bind needs no URL credential;
                 # other binds require a distinct tablet token.
                 tailnet = (BIND.startswith("100.")
@@ -538,9 +539,30 @@ class H(BaseHTTPRequestHandler):
                 if not tailnet and (not TABLET_TOKEN or self.q().get("k") != TABLET_TOKEN):
                     return self.send(404, {"error": "not found"})
                 if p == "/tablet":
+                    with open(IPAD_HTML, "rb") as f:
+                        return self.send(200, f.read(), "text/html; charset=utf-8",
+                                         {"Referrer-Policy": "no-referrer"})
+                if p == "/tablet/legacy":
                     with open(TABLET_HTML, "rb") as f:
                         return self.send(200, f.read(), "text/html; charset=utf-8",
                                          {"Referrer-Policy": "no-referrer"})
+                if p == "/api/tablet/sports":
+                    def game(g):
+                        if g is None:
+                            return None
+                        return {"opponent": g.opp_name, "abbr": g.opp,
+                                "start": g.start, "state": g.state, "detail": g.detail,
+                                "note": g.note, "us": g.us, "them": g.them,
+                                "home": g.home, "tv": g.tv, "result": g.result}
+                    with board.cond:
+                        cached = {r.key: r for r in board.snap.get("teams") or []}
+                        rows = [{"key": key, "label": S.TEAMS[key][0],
+                                 "record": cached[key].record if key in cached else "",
+                                 "live": game(cached[key].live) if key in cached else None,
+                                 "last": game(cached[key].last) if key in cached else None,
+                                 "next": game(cached[key].next) if key in cached else None}
+                                for key in ("man_utd", "india_men", "f1", "cal_fb")]
+                    return self.send(200, {"sports": rows, "updated": board.updated})
                 page = self.q().get("page", "quad")
                 if page not in PAGES:
                     return self.send(400, {"error": "invalid page"})

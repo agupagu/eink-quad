@@ -1,5 +1,6 @@
 """Regression checks for the four personalized sports and tablet-friendly render."""
 import os
+import json
 import sys
 import time
 import unittest
@@ -69,7 +70,20 @@ class SportTests(unittest.TestCase):
                 self.assertEqual(rejected.exception.code, 404)
                 rejected.exception.close()
                 with urllib.request.urlopen(base + "/tablet?k=local-tablet", timeout=5) as r:
-                    self.assertIn(b"apple-mobile-web-app-capable", r.read())
+                    page = r.read()
+                    self.assertIn(b"apple-mobile-web-app-capable", page)
+                    for key in S.TEAMS:
+                        self.assertIn(f'data-key="{key}"'.encode(), page)
+                with urllib.request.urlopen(base + "/tablet/legacy?k=local-tablet", timeout=5) as r:
+                    self.assertIn(b'data-page="sports"', r.read())
+                with urllib.request.urlopen(base + "/api/tablet/sports?k=local-tablet", timeout=5) as r:
+                    data = json.load(r)
+                    self.assertEqual({row["key"] for row in data["sports"]}, set(S.TEAMS))
+                    self.assertEqual(set(data["sports"][0]), {"key", "label", "live", "next", "last", "record"})
+                with self.assertRaises(urllib.error.HTTPError) as rejected_sports:
+                    urllib.request.urlopen(base + "/api/tablet/sports", timeout=5)
+                self.assertEqual(rejected_sports.exception.code, 404)
+                rejected_sports.exception.close()
                 with urllib.request.urlopen(base + "/api/tablet/frame?page=sports&k=local-tablet", timeout=5) as r:
                     self.assertEqual(r.headers["Content-Type"], "image/png")
                     version = r.headers["X-Version"]

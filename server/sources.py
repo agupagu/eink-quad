@@ -93,6 +93,95 @@ class Day:
     uv: float = 0
 
 
+PSI_URL = "https://api-open.data.gov.sg/v2/real-time/api/psi"
+PSI_REGIONS = ("north", "south", "east", "west", "central")
+SG_TZ = datetime.timezone(datetime.timedelta(hours=8))
+
+
+@dataclass
+class Psi:
+    values: dict = field(default_factory=dict)  # absent regions stay absent, never zero
+    timestamp: datetime.datetime | None = None
+    fetched: float = 0.0
+    error: str | None = None
+
+    def stale(self, now=None):
+        return bool(self.error or self.timestamp is None or
+                    (time.time() if now is None else now) - self.timestamp.timestamp() >= 7200)
+
+
+def is_singapore(cfg):
+    # Geographic bounds avoid presenting Singapore data for an unrelated city.
+    try:
+        return 1.15 <= float(cfg["lat"]) <= 1.48 and 103.58 <= float(cfg["lon"]) <= 104.10
+    except (KeyError, TypeError, ValueError):
+        return str(cfg.get("city", "")).strip().lower() == "singapore"
+
+
+def psi_category(value):
+    if value is None:
+        return "No data"
+    for limit, label in ((50, "Good"), (100, "Moderate"), (200, "Unhealthy"),
+                         (300, "Very unhealthy")):
+        if value <= limit:
+            return label
+    return "Hazardous"
+
+
+def parse_psi(data):
+    """Strict v2 schema; reporting timestamp, not API update/fetch time."""
+    if not isinstance(data, dict) or data.get("code") != 0:
+        raise ValueError((data.get("errorMsg") or "NEA PSI API error") if isinstance(data, dict)
+                         else "Invalid NEA PSI response")
+    body = data.get("data")
+    if not isinstance(body, dict) or not isinstance(body.get("items"), list):
+        raise ValueError("NEA PSI response has no items")
+    candidates = []
+    for item in body["items"]:
+        try:
+            stamp = datetime.datetime.fromisoformat(item["timestamp"].replace("Z", "+00:00"))
+            if stamp.tzinfo is None or stamp.utcoffset() is None:
+                continue
+            readings = item["readings"]["psi_twenty_four_hourly"]
+            values = {}
+            for region in PSI_REGIONS:
+                value = readings.get(region)
+                if (isinstance(value, (int, float)) and not isinstance(value, bool)
+                        and math.isfinite(value) and value >= 0 and int(value) == value):
+                    values[region] = int(value)
+            if values:
+                candidates.append(Psi(values=values, timestamp=stamp, fetched=time.time()))
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
+    if not candidates:
+        raise ValueError("NEA PSI response has no valid regional 24-hour reading")
+    return max(candidates, key=lambda p: p.timestamp)
+
+
+def _fetch_psi():
+    response = requests.get(PSI_URL, headers={"User-Agent": UA_BOT}, timeout=10)
+    response.raise_for_status()
+    return parse_psi(response.json())
+
+
+_psi = Cached(600)
+
+
+def psi_snapshot():
+    """Copy cached state without I/O, including any failed refresh."""
+    with _psi.lock:
+        old = _psi.value
+        return Psi(values=dict(old.values) if old else {}, timestamp=old.timestamp if old else None,
+                   fetched=old.fetched if old else 0.0, error=_psi.error)
+
+
+def psi(force=False):
+    def fetch_psi():
+        return _fetch_psi()
+    _psi.get(fetch_psi, force)
+    return psi_snapshot()
+
+
 @dataclass
 class Weather:
     temp: float
@@ -108,6 +197,7 @@ class Weather:
     rain_note: str = ""  # "Rain likely around 4 PM"
     alerts: list = field(default_factory=list)   # [(event, headline, severity)]
     fetched: float = 0.0
+    psi: Psi | None = None
 
 
 def _fetch_weather(lat, lon, units="fahrenheit"):
@@ -194,10 +284,12 @@ def weather(cfg, force=False) -> Weather | None:
     def fetch_alerts():
         return _fetch_alerts(lat, lon)
 
+    regional_psi = psi(force) if is_singapore(cfg) else None
     w = _weather.get(fetch_weather, force)
     a = _alerts.get(fetch_alerts, force) if (24 <= lat <= 50 and -125 <= lon <= -66) else []
     if w is not None:
         w.alerts = a or []
+        w.psi = regional_psi
     return w
 
 

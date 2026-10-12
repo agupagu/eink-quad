@@ -2,12 +2,16 @@
 
 ## Singapore tablet fork
 
-This fork retains the original e-ink weather/news/sports/sky renderer at
-`/tablet/legacy`, but the **default iPad Home** is now a native-resolution 2×2
-sports grid: Manchester United, India men, F1 and Cal Bears each get a full
-quadrant. The iPad uses the original e-paper's monochrome look: white
-background, black ink, neutral grays and grayscale logos—no colored accents or
-beige cards. Tap a quadrant for its own detail screen; swipe between sports.
+The **default iPad Home** uses the original weather/news-and-markets/sports/sky
+quad, with tappable corners and dedicated pages. The Sports tab opens a
+native-resolution 2×2 board: Manchester United, India men, F1 and Cal Bears,
+with grayscale team and opponent logos and individual detail screens.
+The viewer uses a paper-textured monochrome look and the upstream demo's
+UC8179-style page refresh: old-image inversion, black, white, new-image
+inversion, then settled ink. Data-only changes use a smaller partial refresh;
+periodic full clears reset simulated ghosting. Reduced-motion preferences
+turn flashing off by default. Paper/night appearance, refresh style and
+optional page rotation are local viewer settings, not server administration.
 Manchester United and Cal use ESPN's team schedules; F1 uses ESPN's season
 calendar; India now discovers series from ESPN's **dated** daily scoreboards for
 the next 14 days, then fetches each series' full fixture list and recent
@@ -27,11 +31,16 @@ if you want useful plane-overhead data. The optional LLM brief is off by default
 Python server as below. If it is bound to a Tailscale IP, open
 `http://<tailscale-ip>:8740/tablet` on a device connected to the same tailnet.
 For a non-Tailscale bind, set a distinct `QUAD_TABLET_TOKEN` and open
-`http://<your-server>/tablet?k=<QUAD_TABLET_TOKEN>`. The iPad viewer shows
-four sports quadrants and opens a dedicated detail screen on tap. It uses
-native HTML rather than scaling the 800×480 e-paper image; keyed text updates
-avoid tearing down the cards during each 30-second data refresh. For the
-original four-topic e-paper layout, open `/tablet/legacy`.
+`http://<your-server>/tablet?k=<QUAD_TABLET_TOKEN>`. Tap a home corner or use the
+Home / Weather / News / Sports / Sky tabs; swipe or use arrow keys to navigate.
+The 800×480 source frames retain their aspect ratio, while the sports board is
+native HTML with keyed updates. `/tablet/legacy` remains a plain image viewer.
+
+For Singapore coordinates, the weather corner also includes a schematic
+island map with North, South, East, West and Central **24-hour PSI** from
+NEA via data.gov.sg. The Weather page expands the map and category legend.
+Reading timestamps and stale/unavailable states are explicit; failed fetches
+retain the last valid data rather than fabricating zero readings.
 Landscape is best on an iPad; Add to Home Screen gives app-like fullscreen
 mode. The original server still renders e-paper pixels with Pillow. Keep the server behind Tailscale,
 HTTPS, or another private network, and change all example tokens before
@@ -130,9 +139,23 @@ On first boot the board opens a Wi-Fi setup portal named `QuadBoard-XXXX`. Join 
 
 `firmware/serial.ps1 -Port COM9` resets the board and prints its boot log.
 
+## Verification
+
+```sh
+python -m unittest discover -s tests -v
+# Optional real-browser checks against a running read-only viewer:
+pip install playwright
+python -m playwright install chromium
+QUAD_TEST_URL='http://<tailscale-ip>:8740/tablet' python tests/browser_tablet.py
+```
+
+Browser checks exercise pages, refresh phases, sports/details, settings,
+reduced motion, portrait sizing and API-offline cache recovery. Screenshots
+are written to `.test-artifacts/` (override with `QUAD_TEST_ARTIFACTS`).
+
 ## Notes
 
-- Times use the server's `TZ` (defaults to `America/New_York`).
+- Times use the server's `TZ` (defaults to `Asia/Singapore`).
 - The notes feature reads a separate "note box" project's database and is off unless `QUAD_NOTES_DB` is set.
 - Team logos and airline logos are downloaded at runtime and cached in `server/cache/`. None are shipped in this repo.
 

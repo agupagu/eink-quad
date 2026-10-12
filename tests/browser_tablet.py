@@ -1,0 +1,97 @@
+from playwright.sync_api import sync_playwright
+from pathlib import Path
+import json
+import os
+ROOT=Path(os.environ.get('QUAD_TEST_ARTIFACTS', '.test-artifacts'))
+ROOT.mkdir(parents=True, exist_ok=True)
+URL=os.environ.get('QUAD_TEST_URL', 'http://127.0.0.1:18740/tablet?k=local-test')
+with sync_playwright() as p:
+    browser=getattr(p,os.environ.get('QUAD_TEST_BROWSER','chromium')).launch(headless=True)
+    page=browser.new_page(viewport={'width':1180,'height':820},device_scale_factor=1)
+    errors=[]
+    page.on('pageerror',lambda e:errors.append(str(e)))
+    page.goto(URL,wait_until='networkidle')
+    page.wait_for_selector('.frame',timeout=30000)
+    page.wait_for_timeout(900)
+    assert page.locator('#quadrants').is_visible()
+    page.screenshot(path=str(ROOT/'eink-home-local.png'))
+    checks=['home loaded']
+    page.evaluate('''window.phases=[]; new MutationObserver(()=>window.phases.push(document.querySelector('#stage').className)).observe(document.querySelector('#stage'),{attributes:true,attributeFilter:['class']})''')
+    for name in ['weather','news','sky']:
+        page.locator('nav [data-page='+name+']').click()
+        page.wait_for_function('(id)=>document.querySelector(".frame")?.alt.startsWith(id)',arg={'weather':'Weather','news':'News','sky':'Sky'}[name])
+        page.wait_for_timeout(800)
+        assert page.locator('#stage').get_attribute('class')=='stage'
+        checks.append(name+' loaded and refresh settled')
+    phases=page.evaluate('window.phases')
+    for phase in ['phase-invert','phase-black','phase-white']:
+        assert any(phase in item for item in phases), phases
+    checks.append('real e-ink phase sequence observed')
+    page.locator('nav [data-page=sports]').click()
+    page.wait_for_function('document.querySelectorAll(".card").length===4')
+    page.wait_for_function('!document.querySelector(".sports").innerText.includes("Awaiting feed data")')
+    page.wait_for_timeout(1000)
+    page.screenshot(path=str(ROOT/'eink-sports-local.png'))
+    logos=page.locator('.identity img').evaluate_all('(imgs)=>imgs.map(i=>({alt:i.alt,url:i.src,ok:i.complete&&i.naturalWidth>0}))')
+    checks.append('four sports and logos')
+    page.locator('.card[data-key=india_men]').click()
+    page.wait_for_selector('.detail[data-key=india_men]')
+    assert page.url.split('?')[1].split('#')[0] == URL.split('?')[1].split('#')[0] if '?' in URL else True
+    page.wait_for_timeout(700)
+    checks.append('india details and token preservation')
+    page.keyboard.press('ArrowRight')
+    page.wait_for_selector('.detail[data-key=man_utd]')
+    page.wait_for_timeout(700)
+    page.locator('#back').click()
+    page.wait_for_selector('.sports')
+    page.wait_for_timeout(700)
+    page.locator('.card[data-key=india_men]').click()
+    page.emulate_media(reduced_motion='reduce')
+    page.wait_for_selector('.detail[data-key=india_men]',timeout=3000)
+    page.emulate_media(reduced_motion='no-preference')
+    page.locator('#back').click()
+    page.wait_for_selector('.sports')
+    page.wait_for_timeout(700)
+    checks.append('cancelled refresh reconciles sports selection')
+    assert page.evaluate('''async()=>{const original=frames.get('quad');const discarded=await rememberFrame('quad',original.blob,'obsolete',()=>false);return discarded===null&&frames.get('quad')===original;}''')
+    checks.append('superseded decoder cannot replace frame cache')
+    page.locator('#settings-open').click()
+    page.locator('#paper').select_option('white')
+    page.locator('#night').check()
+    page.locator('#refresh-style').select_option('none')
+    page.locator('#settings-close').click()
+    assert page.locator('body').get_attribute('data-night')=='true'
+    page.reload(wait_until='networkidle')
+    assert page.locator('body').get_attribute('data-night')=='true'
+    checks.append('display settings persist')
+    page.emulate_media(reduced_motion='reduce')
+    page.locator('#home').click()
+    page.wait_for_selector('.frame')
+    assert page.locator('#stage').get_attribute('class')=='stage'
+    checks.append('reduced motion')
+    page.set_viewport_size({'width':820,'height':1180})
+    page.wait_for_timeout(300)
+    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+    page.screenshot(path=str(ROOT/'eink-portrait-local.png'))
+    checks.append('portrait no horizontal overflow')
+    before=page.locator('.frame').get_attribute('src')
+    page.route('**/api/tablet/**', lambda route: route.abort())
+    page.locator('#reload').click()
+    page.wait_for_function('document.querySelector("#status").innerText.includes("last display retained")')
+    assert page.locator('.frame').get_attribute('src')==before
+    checks.append('failed fetch retains decoded display')
+    page.reload(wait_until='networkidle')
+    page.wait_for_selector('.frame')
+    page.wait_for_function('document.querySelector("#status").innerText.includes("last display retained")')
+    checks.append('offline API reload recovers IndexedDB frame')
+    page.unroute('**/api/tablet/**')
+    page.evaluate('''window.fetch=(_url,options)=>new Promise((_resolve,reject)=>{options.signal.addEventListener('abort',()=>reject(new DOMException('Injected stalled request','AbortError')),{once:true});});''')
+    page.locator('#reload').click()
+    page.wait_for_function('document.querySelector("#status").innerText.includes("timed out")',timeout=15000)
+    assert page.locator('.frame').count()==1
+    checks.append('request timeout reports failure without clearing display')
+    page.unroute_all(behavior='ignoreErrors')
+    page.wait_for_timeout(300)
+    assert not errors, errors
+    print(json.dumps({'checks':checks,'logos':logos,'errors':errors},indent=2))
+    browser.close()

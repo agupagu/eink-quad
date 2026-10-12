@@ -238,6 +238,7 @@ class Board:
         """Refresh one panel's data snapshot from the (cached) sources."""
         if name == "weather":
             self.snap["weather"] = S.weather(cfg, force)
+            self.snap["psi"] = S.psi_snapshot() if S.is_singapore(cfg) else None
         elif name == "news":
             self.snap["heads"] = S.headlines(cfg, force)
             self.snap["quotes"] = S.quotes(cfg, force)
@@ -275,6 +276,7 @@ class Board:
         if t_f is not None and cfg.get("units") != "C":
             t_f = t_f * 9 / 5 + 32
         return R.Ctx(now=now, cfg=cfg, weather=sn.get("weather"), heads=sn.get("heads") or [],
+                     psi=sn.get("psi"),
                      quotes=sn.get("quotes") or [], teams=sn.get("teams") or [], featured=sn.get("featured"),
                      recent=sn.get("recent") or [], day_count=sn.get("day_count", 0), nearby=sn.get("nearby") or [],
                      event=sn.get("event"), upcoming=sn.get("upcoming") or [], brief=sn.get("brief", ""),
@@ -557,11 +559,18 @@ class H(BaseHTTPRequestHandler):
                         return {"opponent": g.opp_name, "abbr": g.opp,
                                 "start": g.start, "state": g.state, "detail": g.detail,
                                 "note": g.note, "us": g.us, "them": g.them,
-                                "home": g.home, "tv": g.tv, "result": g.result}
+                                "home": g.home, "tv": g.tv, "result": g.result,
+                                "opp_logo": g.opp_logo,
+                                "odds": ({"ml_us": g.odds.ml_us, "ml_them": g.odds.ml_them,
+                                          "spread_us": g.odds.spread_us, "total": g.odds.total,
+                                          "win_pct": g.odds.win_pct, "details": g.odds.details}
+                                         if g.odds and cfg.get("odds", True) else None)}
                     with board.cond:
                         cached = {r.key: r for r in board.snap.get("teams") or []}
                         rows = [{"key": key, "label": S.TEAMS[key][0],
+                                 "logo": cached[key].logo if key in cached else "",
                                  "record": cached[key].record if key in cached else "",
+                                 "news": cached[key].news if key in cached else "",
                                  "live": game(cached[key].live) if key in cached else None,
                                  "last": game(cached[key].last) if key in cached else None,
                                  "next": game(cached[key].next) if key in cached else None}
@@ -641,7 +650,7 @@ class H(BaseHTTPRequestHandler):
                 "quiet_now": quiet_now(),
             }
         st["sources"] = {
-            "weather": S._weather.status(), "alerts": S._alerts.status(), "news": S.news_status(),
+            "weather": S._weather.status(), "psi": S._psi.status(), "alerts": S._alerts.status(), "news": S.news_status(),
             "quotes": S.quotes_status(), "sports": S.sports_status(), "brief": S.brief_status(),
             "sky": {"age_s": round(now - sky.updated_at) if sky and sky.updated_at else None,
                     "error": sky.last_error if sky else None},

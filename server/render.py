@@ -325,6 +325,7 @@ class Ctx:
     now: float
     cfg: dict
     weather: object = None
+    psi: object = None            # NEA cache snapshot, also available if forecast fails
     heads: list = field(default_factory=list)
     quotes: list = field(default_factory=list)
     teams: list = field(default_factory=list)
@@ -354,13 +355,88 @@ def _deg(v):
 WIND = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
 
 
-def panel_weather(ctx: Ctx, size):
+def _ctx_psi(ctx):
+    from sources import is_singapore, Psi
+    if not is_singapore(ctx.cfg):
+        return None
+    return getattr(ctx.weather, "psi", None) or ctx.psi or Psi()
+
+
+def _psi_map(reading, size, full=False):
+    """Monochrome region diagram; schematic island, NOT precise boundaries."""
+    c, d = canvas(size)
+    w, h = size
+    # Deliberately schematic Singapore main-island silhouette; no regional borders.
+    outline = [(0.03, .68), (.12, .48), (.20, .36), (.26, .22), (.38, .13),
+               (.47, .19), (.56, .12), (.62, .25), (.72, .28), (.81, .42),
+               (.93, .45), (.98, .60), (.90, .72), (.78, .78), (.68, .91),
+               (.54, .88), (.44, .82), (.34, .84), (.26, .75), (.14, .81)]
+    points = [(int(x * (w - 8)) + 4, int(y * (h - 8)) + 4) for x, y in outline]
+    d.polygon(points, fill=235)
+    d.line(points + [points[0]], fill=INK, width=2 if full else 1)
+    positions = {"north": (.50, .17), "south": (.50, .84), "west": (.17, .51),
+                 "east": (.83, .51), "central": (.50, .51)}
+    for region, (px, py) in positions.items():
+        value = reading.values.get(region)
+        label = region.title() if full else region[0].upper()
+        s = f"{label} {value if value is not None else '—'}"
+        f = F("csb", 17 if full else 13)
+        bw, bh = tw(d, s, f) + 6, 23 if full else 17
+        x, y = px * w, py * h
+        d.rounded_rectangle((x - bw / 2, y - bh / 2, x + bw / 2, y + bh / 2),
+                            radius=3, fill=PAPER, outline=INK)
+        text(d, (x, y), s, f, anchor="mm")
+    return c
+
+
+def _psi_stamp(reading, now, full=False):
+    from sources import SG_TZ
+    if reading.timestamp is None:
+        return "No data" + (" · API error" if reading.error else "")
+    stamp = reading.timestamp.astimezone(SG_TZ).strftime("%d %b %H:%M SGT" if full else "%d/%m %H:%M SGT")
+    flag = "API ERROR · " if reading.error else ("STALE · " if reading.stale(now) else "")
+    return flag + stamp
+
+
+def _psi_card(ctx, size, full=False):
+    from sources import psi_category
+    reading = _ctx_psi(ctx)
+    c, d = canvas(size)
+    w, h = size
+    text(d, (4, 0), "24H PSI · NEA", F("cb", 20 if full else 15))
+    if full:
+        text(d, (w - 4, 3), "Singapore · schematic", F("cm", 12), anchor="ra")
+        text(d, (4, 24), _psi_stamp(reading, ctx.now, True), F("csb", 14))
+        c.paste(_psi_map(reading, (w - 8, 112), True), (4, 46))
+        worst = max(reading.values.values()) if reading.values else None
+        state = psi_category(worst)
+        if reading.values and len(reading.values) < 5:
+            state += " · partial data"
+        text(d, (4, 160), "Highest region: " + state, F("sb", 15))
+        text(d, (4, 180), "0–50 Good · 51–100 Moderate · 101–200 Unhealthy", F("cm", 13))
+        text(d, (4, 195), "201–300 Very unhealthy · >300 Hazardous", F("cm", 13))
+    else:
+        text(d, (w - 4, 3), "diagram", F("cm", 9), anchor="ra")
+        c.paste(_psi_map(reading, (w - 8, 58)), (4, 20))
+        stamp = _psi_stamp(reading, ctx.now)
+        f = fit_font(d, stamp, "csb", w - 8, (12, 11, 10))
+        text(d, (4, 78), ellipsize(d, stamp, f, w - 8), f)
+        text(d, (4, 93), "N/S/E/W compass · C central", F("cm", 10))
+    return c
+
+
+def panel_weather(ctx: Ctx, size, show_psi=True):
     from sources import wmo
     c, d = canvas(size)
     w, h = size
     wx = ctx.weather
+    regional = _ctx_psi(ctx) if show_psi else None
     if wx is None:
-        text(d, (w / 2, h / 2), "Weather unavailable", F("m", 18), anchor="mm")
+        if regional is not None:
+            text(d, (12, 18), "Weather unavailable", F("m", 18))
+            c.paste(_psi_card(ctx, (152, 106)), (w - 160, 48))
+        else:
+            text(d, (w / 2, h / 2), "Weather unavailable", F("m", 18), anchor="mm")
         return c
     y0 = 8
     if wx.alerts:
@@ -373,17 +449,17 @@ def panel_weather(ctx: Ctx, size):
         y0 = 32
     desc, kind = wmo(wx.code)
     night = not wx.is_day and kind in ("sun", "partly")
-    isz = 76 if y0 < 20 else 64
+    isz = 64 if regional is not None else (76 if y0 < 20 else 64)
     paste_icon(c, kind, 10, y0 + 2, isz, night)
-    big = F("sb", 66 if y0 < 20 else 56)
+    big = F("sb", 54 if regional is not None else (66 if y0 < 20 else 56))
     tx = 16 + isz
     text(d, (tx, y0 - 8), _deg(wx.temp), big)
     today = wx.days[0] if wx.days else None
-    cy = y0 + (66 if y0 < 20 else 56)
+    cy = y0 + (54 if regional is not None else (66 if y0 < 20 else 56))
     text(d, (14, cy + 6), ellipsize(d, desc, F("sb", 19), 170), F("sb", 19))
     if not (wx.alerts and wx.rain_note):
         text(d, (14, cy + 28), f"Feels {_deg(wx.feels)}" + (f"  ·  H {today.hi:.0f}  L {today.lo:.0f}" if today else ""),
-             F("m", 16))
+             F("m", 14 if regional is not None else 16))
 
     # right column of small facts
     rx = 238
@@ -399,18 +475,28 @@ def panel_weather(ctx: Ctx, size):
         else:
             facts.append(("Sunrise", today.sunrise.replace(" AM", "a").replace(" PM", "p")))
     fy = y0 + 2
-    for k, v in facts[:2 if wx.alerts else 3]:
-        text(d, (rx, fy), k, F("cm", 16))
-        text(d, (w - 12, fy), v, F("csb", 18), anchor="ra")
-        dotted(d, rx + tw(d, k, F("cm", 16)) + 5, w - 14 - tw(d, v, F("csb", 18)) - 4, fy + 14)
-        fy += 23
+    if regional is not None:
+        # Fixed upper-right PSI area, with rain bars below and forecasts untouched.
+        c.paste(_psi_card(ctx, (w - rx - 8, 106)), (rx, 4))
+        facts_line = " · ".join(k + " " + v for k, v in facts[:3])
+        text(d, (14, 111), ellipsize(d, facts_line, F("cm", 12), rx - 28), F("cm", 12))
+        fy = 107
+    else:
+        for k, v in facts[:2 if wx.alerts else 3]:
+            text(d, (rx, fy), k, F("cm", 16))
+            text(d, (w - 12, fy), v, F("csb", 18), anchor="ra")
+            dotted(d, rx + tw(d, k, F("cm", 16)) + 5, w - 14 - tw(d, v, F("csb", 18)) - 4, fy + 14)
+            fy += 23
     # rain: nowcast pill under "Feels" + next-12h chance-of-rain bars under the facts column.
     # Both live in fixed space, so the 3-day row never moves (the pill used to push it off the bottom).
     top = h - 56                       # 3-day row
     if wx.rain_note:
         f = F("csb", 17)
         py = cy + 30 if wx.alerts else cy + 50   # under an alert banner the pill replaces "Feels"
-        pill(d, 12, py, ellipsize(d, wx.rain_note, f, rx - 34), f, h=21)
+        if regional is not None:
+            py = 128
+            f = F("csb", 15)
+        pill(d, 12, py, ellipsize(d, wx.rain_note, f, rx - 34), f, h=18 if regional else 21)
     _rain_bars(d, wx.hourly, ctx.now, rx, w - 12, fy + 4, top - 7)
     # 3-day row
     days = wx.days[1:4]
@@ -458,7 +544,7 @@ def _rain_bars(d, hourly, now, x0, x1, y0, y1):
     if pk >= 10:
         # label the peak just above its bar
         px = x0 + peak * cw + cw / 2
-        s = f"{pk}%"
+        s = f"{pk}% rain"
         hgt = pk / 100 * bh
         lx = min(max(px, x0 + tw(d, s, fl) / 2), x1 - tw(d, s, fl) / 2)
         text(d, (lx, by1 - hgt - 2), s, fl, anchor="md")
@@ -912,14 +998,20 @@ def detail_weather(ctx, size):
     from sources import wmo
     c, d = canvas(size)
     w, h = size
-    left = panel_weather(ctx, (400, 207))
+    left = panel_weather(ctx, (400, 207), show_psi=False)
     c.paste(left, (0, 0))
     wx = ctx.weather
+    regional = _ctx_psi(ctx)
+    if regional is not None:
+        c.paste(_psi_card(ctx, (w - 420, 213), full=True), (410, 0))
     if wx is None:
         return c
     # 24h chart on the right
     x0, x1, y0, y1 = 430, w - 20, 26, 190
-    text(d, (x0, 4), "NEXT 24 HOURS", F("cb", 17))
+    chart_top = 4
+    if regional is not None:
+        y0, y1, chart_top = 242, h - 24, 222
+    text(d, (x0, chart_top), "NEXT 24 HOURS", F("cb", 17))
     hrs = [hh for hh in wx.hourly if hh[0] >= ctx.now - 1800][:24]
     if len(hrs) > 2:
         temps = [t for _, t, _, _ in hrs]
@@ -942,21 +1034,27 @@ def detail_weather(ctx, size):
             text(d, (X(i), Y(t) - 6), f"{t:.0f}°", F("csb", 15), anchor="md")
             lt = time.localtime(ts)
             text(d, (X(i), y1 + 3), f"{lt.tm_hour % 12 or 12}{'a' if lt.tm_hour < 12 else 'p'}", F("cm", 14), anchor="ma")
-        text(d, (x1, 4), "bars: chance of rain", F("cr", 14), anchor="ra")
+        text(d, (x1, chart_top), "bars: chance of rain", F("cr", 14), anchor="ra")
     # 5-day strip
     days = wx.days[:5]
     top = 222
     d.line((10, top - 6, w - 10, top - 6), fill=INK, width=2)
-    cw = (w - 20) / max(1, len(days))
+    forecast_w = 400 if regional is not None else w
+    cw = (forecast_w - 20) / max(1, len(days))
     for i, day in enumerate(days):
         x = 10 + i * cw
         t = time.strptime(day.date, "%Y-%m-%d")
         dn, dk = wmo(day.code)
-        text(d, (x + cw / 2, top + 4), "TODAY" if i == 0 else time.strftime("%A", t).upper(), F("cb", 19), anchor="ma")
-        paste_icon(c, dk, int(x + cw / 2 - 30), top + 30, 60)
-        text(d, (x + cw / 2, top + 96), f"{day.hi:.0f}°  {day.lo:.0f}°", F("sb", 24), anchor="ma")
-        text(d, (x + cw / 2, top + 126), dn, F("m", 16), anchor="ma")
-        text(d, (x + cw / 2, top + 148), f"{day.pop}% rain · UV {day.uv:.0f}", F("cm", 15), anchor="ma")
+        text(d, (x + cw / 2, top + 4), "TODAY" if i == 0 else time.strftime("%a" if regional else "%A", t).upper(), F("cb", 16 if regional else 19), anchor="ma")
+        isz = 40 if regional else 60
+        paste_icon(c, dk, int(x + cw / 2 - isz / 2), top + 30, isz)
+        text(d, (x + cw / 2, top + 96), f"{day.hi:.0f}°  {day.lo:.0f}°", F("sb", 20 if regional else 24), anchor="ma")
+        text(d, (x + cw / 2, top + 126), ellipsize(d, dn, F("m", 14 if regional else 16), cw - 8), F("m", 14 if regional else 16), anchor="ma")
+        if regional is not None:
+            text(d, (x + cw / 2, top + 148), f"{day.pop}% rain", F("cm", 13), anchor="ma")
+            text(d, (x + cw / 2, top + 165), f"UV {day.uv:.0f}", F("cm", 13), anchor="ma")
+        else:
+            text(d, (x + cw / 2, top + 148), f"{day.pop}% rain · UV {day.uv:.0f}", F("cm", 15), anchor="ma")
         if i:
             d.line((x, top + 4, x, h - 10), fill=INK, width=1)
     return c

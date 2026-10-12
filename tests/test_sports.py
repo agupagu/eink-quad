@@ -90,10 +90,9 @@ class SportTests(unittest.TestCase):
                     page = r.read()
                     self.assertIn(b"apple-mobile-web-app-capable", page)
                     self.assertIn(b'name="theme-color" content="#ffffff"', page)
-                    self.assertIn(b'filter:grayscale(1)', page)
-                    self.assertIn(b':root{color:#000;background:#fff}', page)
-                    for key in S.TEAMS:
-                        self.assertIn(f'data-key="{key}"'.encode(), page)
+                    self.assertIn(b'prefers-reduced-motion', page)
+                    for screen in ("quad", "weather", "news", "sports", "sky"):
+                        self.assertIn(f'data-page="{screen}"'.encode(), page)
                 with urllib.request.urlopen(base + "/tablet/legacy?k=local-tablet", timeout=5) as r:
                     self.assertIn(b'data-page="sports"', r.read())
                 with urllib.request.urlopen(base + "/tablet/india-cricket.svg?k=local-tablet", timeout=5) as r:
@@ -106,7 +105,24 @@ class SportTests(unittest.TestCase):
                 with urllib.request.urlopen(base + "/api/tablet/sports?k=local-tablet", timeout=5) as r:
                     data = json.load(r)
                     self.assertEqual({row["key"] for row in data["sports"]}, set(S.TEAMS))
-                    self.assertEqual(set(data["sports"][0]), {"key", "label", "live", "next", "last", "record"})
+                    self.assertEqual(set(data["sports"][0]), {"key", "label", "logo", "news", "live", "next", "last", "record"})
+                sample = S.Game(team="Manchester United", abbr="MAN", opp="ARS",
+                                opp_name="Arsenal", home=True, start=time.time(),
+                                state="pre", detail="", opp_logo="https://example.test/arsenal.png",
+                                odds=S.Odds(book="test", details="MAN -1", spread_us=-1,
+                                            total=2.5, ml_us=-150, ml_them=125, win_pct=57))
+                with patch.dict(A.board.snap, {"teams": [S.TeamRow(
+                        key="man_utd", label="Manchester United", next=sample,
+                        logo="https://example.test/united.png", news="Team headline")]}):
+                    with urllib.request.urlopen(base + "/api/tablet/sports?k=local-tablet", timeout=5) as r:
+                        row = json.load(r)["sports"][0]
+                        self.assertEqual(row["logo"], "https://example.test/united.png")
+                        self.assertEqual(row["next"]["opp_logo"], "https://example.test/arsenal.png")
+                        self.assertEqual(row["news"], "Team headline")
+                        self.assertEqual(row["next"]["odds"]["win_pct"], 57)
+                    with patch.dict(A.cfg, {"odds": False}):
+                        with urllib.request.urlopen(base + "/api/tablet/sports?k=local-tablet", timeout=5) as r:
+                            self.assertIsNone(json.load(r)["sports"][0]["next"]["odds"])
                 with self.assertRaises(urllib.error.HTTPError) as rejected_sports:
                     urllib.request.urlopen(base + "/api/tablet/sports", timeout=5)
                 self.assertEqual(rejected_sports.exception.code, 404)

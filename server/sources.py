@@ -544,7 +544,7 @@ def _fetch_crypto(coins):
     return parse_crypto(markets, glob)
 
 
-_crypto = Cached(600)
+_crypto = Cached(60)   # 1/min matches the board cadence; free tier allows it
 
 
 def crypto_snapshot():

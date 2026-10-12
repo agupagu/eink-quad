@@ -3,6 +3,9 @@ import os
 import sys
 import time
 import unittest
+import threading
+import urllib.request
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
@@ -52,6 +55,29 @@ class SportTests(unittest.TestCase):
             with self.subTest(page=page):
                 img = R.compose(R.Ctx(now=time.time(), cfg=cfg, teams=rows, page=page))
                 self.assertEqual(img.size, (R.W, R.H))
+
+    def test_tablet_viewer_is_read_only_and_conditional(self):
+        import app as A
+        with patch.object(A, "TABLET_TOKEN", "local-tablet"):
+            server = A.Server(("127.0.0.1", 0), A.H)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_port}"
+            try:
+                with self.assertRaises(urllib.error.HTTPError) as rejected:
+                    urllib.request.urlopen(base + "/tablet", timeout=5)
+                self.assertEqual(rejected.exception.code, 404)
+                rejected.exception.close()
+                with urllib.request.urlopen(base + "/tablet?k=local-tablet", timeout=5) as r:
+                    self.assertIn(b"apple-mobile-web-app-capable", r.read())
+                with urllib.request.urlopen(base + "/api/tablet/frame?page=sports&k=local-tablet", timeout=5) as r:
+                    self.assertEqual(r.headers["Content-Type"], "image/png")
+                    version = r.headers["X-Version"]
+                with urllib.request.urlopen(base + f"/api/tablet/frame?page=sports&k=local-tablet&v={version}", timeout=5) as r:
+                    self.assertEqual(r.status, 204)
+            finally:
+                server.shutdown()
+                server.server_close()
 
 
 if __name__ == "__main__":

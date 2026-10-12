@@ -15,11 +15,14 @@ coordinates are a placeholder; set your actual location privately in settings
 if you want useful plane-overhead data. The optional LLM brief is off by default.
 
 **Any spare Android tablet or iPad works as a screen; no root required.** Run the
-Python server as below, set a distinct `QUAD_TABLET_TOKEN`, then open
-`http://<your-server>/tablet?k=<QUAD_TABLET_TOKEN>` on
-the device. It serves a read-only viewer with Home plus four touch-selectable
-detail screens; it swaps preloaded frames in place every 15 seconds, without
-flashing the browser. The server continues to render pixels with Pillow at the
+Python server as below. If it is bound to a Tailscale IP, open
+`http://<tailscale-ip>:8740/tablet` on a device connected to the same tailnet.
+For a non-Tailscale bind, set a distinct `QUAD_TABLET_TOKEN` and open
+`http://<your-server>/tablet?k=<QUAD_TABLET_TOKEN>`. The read-only viewer
+has Home plus four touch-selectable detail screens; it preloads and swaps
+frames in place every 15 seconds without flashing the browser. Landscape is
+best on an iPad; Add to Home Screen gives app-like fullscreen mode. Swipe the
+screen or use the bottom tabs. The server continues to render pixels with Pillow at the
 original 800×480, scaled to fit your tablet. Keep the server behind Tailscale,
 HTTPS, or another private network, and change all example tokens before
 exposing it. Set `QUAD_TABLET_TOKEN` separately from `QUAD_TOKEN` and

@@ -1115,7 +1115,8 @@ def compose_page(ctx: Ctx, name: str) -> Image.Image:
     s, d = canvas((W, STRIP_H))
     titles = {"weather": "Weather", "news": "News & markets", "sports": "Scores & schedule", "sky": "Sky above"}
     text(d, (14, STRIP_H / 2 - 1), titles.get(name, name).upper(), F("cb", 19), anchor="lm")
-    text(d, (W - 14, STRIP_H / 2 - 1), "middle: back  ·  right: next  ·  left: home", F("cm", 15), anchor="rm")
+    hint = "SWIPE OR USE TABS" if ctx.cfg.get("tablet_mode") else "middle: back  ·  right: next  ·  left: home"
+    text(d, (W - 14, STRIP_H / 2 - 1), hint, F("cm", 15), anchor="rm")
     d.line((0, STRIP_H - 1, W, STRIP_H - 1), fill=INK, width=2)
     c.paste(s, (0, HEAD_H))
     c.paste(DETAILS[name](ctx, BODY), (0, GRID_Y))

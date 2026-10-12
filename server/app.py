@@ -13,6 +13,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import io
+import ipaddress
 import json
 import os
 import re
@@ -529,7 +530,12 @@ class H(BaseHTTPRequestHandler):
             if p == "/healthz":
                 return self.send(200, "ok", "text/plain")
             if p in ("/tablet", "/api/tablet/frame"):
-                if not TABLET_TOKEN or self.q().get("k") != TABLET_TOKEN:
+                # Read-only screen on a Tailnet bind needs no URL credential;
+                # other binds require a distinct tablet token.
+                tailnet = (BIND.startswith("100.")
+                           and ipaddress.ip_address(BIND) in ipaddress.ip_network("100.64.0.0/10")
+                           and ipaddress.ip_address(self.client_address[0]) in ipaddress.ip_network("100.64.0.0/10"))
+                if not tailnet and (not TABLET_TOKEN or self.q().get("k") != TABLET_TOKEN):
                     return self.send(404, {"error": "not found"})
                 if p == "/tablet":
                     with open(TABLET_HTML, "rb") as f:
@@ -539,7 +545,12 @@ class H(BaseHTTPRequestHandler):
                 if page not in PAGES:
                     return self.send(400, {"error": "invalid page"})
                 with board.cond:
-                    img, version = R.compose(board.ctx(page=page)), board.version
+                    version = board.version
+                    if self.q().get("v") == str(version):
+                        return self.send(204, b"", headers={"X-Version": version})
+                    ctx = board.ctx(page=page)
+                    ctx.cfg = {**ctx.cfg, "tablet_mode": True}
+                    img = R.compose(ctx)
                 return self.png(img, {"X-Version": version})
             if not self.admin():
                 return self.send(404, {"error": "not found"})

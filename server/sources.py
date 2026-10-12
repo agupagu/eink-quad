@@ -453,6 +453,124 @@ def quotes_status():
     return _quotes.status()
 
 
+# ============================================================ crypto
+
+CG_MARKETS_URL = "https://api.coingecko.com/api/v3/coins/markets"
+CG_GLOBAL_URL = "https://api.coingecko.com/api/v3/global"
+CG_RETRY_S = 30.0           # polite single backoff when the free tier 429s
+DEFAULT_COINS = ["bitcoin", "ethereum", "solana"]
+
+
+@dataclass
+class Coin:
+    id: str
+    symbol: str             # "btc", as CoinGecko reports it
+    name: str
+    price: float            # USD
+    chg_pct: float | None   # 24h % in USD; None = API sent null, never zero
+    spark: list = field(default_factory=list)   # 7d hourly closes
+
+
+@dataclass
+class Crypto:
+    coins: dict = field(default_factory=dict)  # id -> Coin; requested-but-missing stay absent
+    btc_dominance: float | None = None         # % of global market cap, from /global
+    market_cap_chg_24h: float | None = None    # global market cap 24h % (USD), from /global
+    fetched: float = 0.0
+    error: str | None = None
+
+    def counts(self):
+        """(advancing, declining) among watchlist coins that have a 24h change."""
+        up = sum(1 for c in self.coins.values() if c.chg_pct is not None and c.chg_pct > 0)
+        dn = sum(1 for c in self.coins.values() if c.chg_pct is not None and c.chg_pct < 0)
+        return up, dn
+
+
+def _finite(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def parse_crypto(markets, glob):
+    """Strict CoinGecko parse; no fabricated values. A coin the response omits
+    stays absent, a null 24h change stays None, a broken sparkline just drops."""
+    if not isinstance(markets, list) or not markets:
+        raise ValueError("CoinGecko markets response is not a non-empty list")
+    coins = {}
+    for item in markets:
+        if not isinstance(item, dict):
+            continue
+        cid = item.get("id")
+        price = item.get("current_price")
+        if not isinstance(cid, str) or not cid or not _finite(price) or price < 0:
+            continue
+        chg = item.get("price_change_percentage_24h_in_currency")
+        if not _finite(chg):
+            chg = item.get("price_change_percentage_24h")
+        sp = item.get("sparkline_in_7d")
+        pts = sp.get("price") if isinstance(sp, dict) else None
+        coins[cid] = Coin(id=cid, symbol=str(item.get("symbol") or cid)[:6],
+                          name=str(item.get("name") or cid)[:24], price=float(price),
+                          chg_pct=float(chg) if _finite(chg) else None,
+                          spark=[float(p) for p in pts if _finite(p)] if isinstance(pts, list) else [])
+    if not coins:
+        raise ValueError("CoinGecko response has no coin with a usable price")
+    if not isinstance(glob, dict) or not isinstance(glob.get("data"), dict):
+        raise ValueError("CoinGecko /global response has no data")
+    gd = glob["data"]
+    dom = (gd.get("market_cap_percentage") or {}).get("btc")
+    mcap = gd.get("market_cap_change_percentage_24h_usd")
+    return Crypto(coins=coins,
+                  btc_dominance=float(dom) if _finite(dom) else None,
+                  market_cap_chg_24h=float(mcap) if _finite(mcap) else None,
+                  fetched=time.time())
+
+
+def _cg_get(url, params):
+    """One polite retry on 429, with a backoff, inside the fetch only."""
+    for attempt in (0, 1):
+        if attempt:
+            time.sleep(CG_RETRY_S)
+        r = requests.get(url, params=params, headers={"User-Agent": UA_BOT}, timeout=10)
+        if r.status_code != 429 or attempt:
+            r.raise_for_status()
+            return r.json()
+    raise RuntimeError("unreachable")
+
+
+def _fetch_crypto(coins):
+    markets = _cg_get(CG_MARKETS_URL, {"vs_currency": "usd", "ids": ",".join(coins),
+                                       "sparkline": "true", "price_change_percentage": "24h"})
+    glob = _cg_get(CG_GLOBAL_URL, None)
+    return parse_crypto(markets, glob)
+
+
+_crypto = Cached(600)
+
+
+def crypto_snapshot():
+    """Copy cached state without I/O, including any failed refresh."""
+    with _crypto.lock:
+        old = _crypto.value
+        return Crypto(coins=dict(old.coins) if old else {},
+                      btc_dominance=old.btc_dominance if old else None,
+                      market_cap_chg_24h=old.market_cap_chg_24h if old else None,
+                      fetched=old.fetched if old else 0.0, error=_crypto.error)
+
+
+def crypto(cfg, force=False) -> Crypto:
+    watch = [c for c in cfg.get("coins", DEFAULT_COINS) if c]
+
+    def fetch_crypto():
+        return _fetch_crypto(watch)
+    # a newly added coin should appear on the next refresh, not after the ttl
+    _crypto.get(fetch_crypto, force or (_crypto.value is not None and set(watch) - set(_crypto.value.coins)))
+    return crypto_snapshot()
+
+
+def crypto_status():
+    return _crypto.status()
+
+
 # ============================================================ sports
 
 # (key, label, sport, league, espn team id)

@@ -65,7 +65,7 @@ class SportTests(unittest.TestCase):
         self.assertIsNone(games[0].them)
 
     def test_every_detail_screen_renders(self):
-        cfg = {"slots": ["weather", "news", "sports", "sky"], "city": "Singapore",
+        cfg = {"slots": ["weather", "news", "sports", "crypto"], "city": "Singapore",
                "lat": 1.3521, "lon": 103.8198, "units": "C", "radar_nm": 25,
                "show_idle": True, "teams": list(S.TEAMS)}
         rows = [S.TeamRow(key=k, label=v[0]) for k, v in S.TEAMS.items()]

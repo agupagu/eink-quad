@@ -328,6 +328,7 @@ class Ctx:
     psi: object = None            # NEA cache snapshot, also available if forecast fails
     heads: list = field(default_factory=list)
     quotes: list = field(default_factory=list)
+    crypto: object = None         # CoinGecko snapshot (sources.Crypto)
     teams: list = field(default_factory=list)
     featured: object = None       # sky Sighting
     recent: list = field(default_factory=list)
@@ -751,6 +752,113 @@ def panel_sports(ctx: Ctx, size, rows=None):
     return c
 
 
+# ------------------------------------------------------------------ crypto
+
+def _price(p):
+    """Like _quote_cell's price format, plus a sub-dollar case."""
+    if p >= 1000:
+        return f"{p:,.0f}"
+    if p >= 1:
+        return f"{p:,.2f}"
+    return f"{p:,.4f}"
+
+
+def _pct(d, x_right, y, pct, size=16):
+    """24h % right-aligned at x_right, triangle before it (never colour)."""
+    f = F("cb", size)
+    if pct is None:
+        text(d, (x_right, y), "—", f, anchor="ra")
+        return
+    s = f"{abs(pct):.1f}%"
+    t = max(6, int(size * 0.45))
+    if abs(pct) >= 0.05:
+        tri(d, x_right - tw(d, s, f) - t - 3, y + size * 0.3, t, pct > 0)
+    text(d, (x_right, y), s, f, anchor="ra")
+
+
+def _spark(d, x0, y0, x1, y1, pts, width=2):
+    """7d price sparkline with a dotted line at the oldest value."""
+    if not pts or len(pts) < 2 or x1 - x0 < 8 or y1 - y0 < 4:
+        return
+    lo, hi = min(pts), max(pts)
+    rng = (hi - lo) or 1
+    n = len(pts)
+
+    def P(i, v):
+        return (x0 + (x1 - x0) * i / (n - 1), y1 - (v - lo) / rng * (y1 - y0))
+    dotted(d, x0, x1, int(P(0, pts[0])[1]), 3)
+    d.line([P(i, v) for i, v in enumerate(pts)], fill=INK, width=width)
+
+
+def _tally(d, x_right, y, up, dn, size=14):
+    """Right-aligned advancing/declining count: '▲ n   ▼ m'."""
+    f = F("cb", size)
+    t = max(6, int(size * 0.45))
+    su, sd = str(up), str(dn)
+    wu = tw(d, su, f) + t + 3
+    wd = tw(d, sd, f) + t + 3
+    x = x_right - (wu + 14 + wd)
+    tri(d, x, y + size * 0.32, t, True)
+    text(d, (x + t + 3, y), su, f)
+    x += wu + 14
+    tri(d, x, y + size * 0.32, t, False)
+    text(d, (x + t + 3, y), sd, f)
+
+
+def _crypto_watch(ctx: Ctx):
+    """Watchlist coins in cfg order (extras after); only those the API returned."""
+    cr = ctx.crypto
+    if cr is None or not getattr(cr, "coins", None):
+        return []
+    order = [c for c in (ctx.cfg.get("coins") or list(cr.coins)) if c in cr.coins]
+    order += sorted(set(cr.coins) - set(order))
+    return [cr.coins[c] for c in order]
+
+
+def _crypto_stamp(cr, prefix="as of ", full=False):
+    if cr.error:
+        return "API ERROR"
+    if not cr.fetched:
+        return ""
+    return prefix + hm(cr.fetched, ampm=not full)
+
+
+def panel_crypto(ctx: Ctx, size):
+    c, d = canvas(size)
+    w, h = size
+    cr = ctx.crypto
+    rows = _crypto_watch(ctx)
+    if not rows:
+        msg = "Crypto unavailable" + (" · " + _crypto_stamp(cr, prefix="") if cr is not None and cr.error else "")
+        text(d, (w / 2, h / 2), msg, F("m", 17), anchor="mm")
+        return c
+    text(d, (8, 2), "CRYPTO · COINGECKO", F("cb", 15))
+    text(d, (w - 8, 4), _crypto_stamp(cr), F("cm", 11), anchor="ra")
+    per = (h - 26 - 22) / len(rows)
+    for i, coin in enumerate(rows):
+        ry = 22 + i * per
+        text(d, (10, ry + 2), coin.symbol.upper(), F("cb", 18))
+        text(d, (10, ry + 24), _price(coin.price), F("cr", 16))
+        _pct(d, w - 140, ry + 4, coin.chg_pct)
+        _spark(d, w - 128, ry + 4, w - 8, ry + per - 6, coin.spark)
+        if i:
+            dotted(d, 10, w - 10, int(ry - 2), 3)
+    fy = h - 22
+    d.line((8, fy - 5, w - 8, fy - 5), fill=INK, width=1)
+    f = F("csb", 14)
+    dom = cr.btc_dominance
+    text(d, (8, fy), f"BTC {dom:.1f}%" if dom is not None else "BTC —", f)
+    mc = cr.market_cap_chg_24h
+    if mc is not None:
+        x = 8 + tw(d, f"BTC {dom:.1f}%" if dom is not None else "BTC —", f) + 14
+        if abs(mc) >= 0.05:
+            tri(d, x, fy + 4, 7, mc > 0)
+            x += 11
+        text(d, (x, fy), f"mcap 24h {abs(mc):.1f}%", f)
+    _tally(d, w - 8, fy, *cr.counts())
+    return c
+
+
 def _flight_label(s):
     return s.flight_no or s.callsign
 
@@ -889,7 +997,7 @@ def _event_card(c, d, ctx, size):
     return c
 
 
-PANELS = {"weather": panel_weather, "news": panel_news, "sports": panel_sports, "sky": panel_sky}
+PANELS = {"weather": panel_weather, "news": panel_news, "sports": panel_sports, "crypto": panel_crypto}
 
 
 # ================================================================== chrome
@@ -980,7 +1088,7 @@ def compose_quad(ctx: Ctx, panels: dict | None = None) -> Image.Image:
     c = Image.new("L", (W, H), PAPER)
     c.paste(header(ctx), (0, 0))
     c.paste(strip(ctx), (0, HEAD_H))
-    slots = ctx.cfg.get("slots", ["weather", "news", "sports", "sky"])
+    slots = ctx.cfg.get("slots", ["weather", "news", "sports", "crypto"])
     for name, box in zip(slots, slot_boxes()):
         img = (panels or {}).get(name)
         if img is None:
@@ -1176,6 +1284,53 @@ def detail_sports(ctx, size):
     return c
 
 
+def detail_crypto(ctx, size):
+    c, d = canvas(size)
+    w, h = size
+    cr = ctx.crypto
+    rows = _crypto_watch(ctx)[:8]
+    if not rows:
+        msg = "Crypto unavailable" + (" · " + _crypto_stamp(cr, prefix="") if cr is not None and cr.error else "")
+        text(d, (w / 2, h / 2), msg, F("m", 20), anchor="mm")
+        return c
+    text(d, (12, 4), "CRYPTO · COINGECKO", F("cb", 17))
+    text(d, (w - 12, 7), _crypto_stamp(cr, prefix="updated "), F("cm", 13), anchor="ra")
+    per = (h - 30 - 28) / len(rows)
+    big = per >= 60
+    for i, coin in enumerate(rows):
+        ry = 30 + i * per
+        if big:
+            sym = F("cb", 24)
+            text(d, (14, ry + 2), coin.symbol.upper(), sym)
+            text(d, (14 + tw(d, coin.symbol.upper(), sym) + 12, ry + 9),
+                 ellipsize(d, coin.name, F("cm", 15), 160), F("cm", 15))
+            text(d, (14, ry + 32), _price(coin.price), F("cr", 26))
+            _pct(d, 430, ry + 4, coin.chg_pct, 24)
+            _spark(d, 450, ry + 8, w - 14, ry + per - 10, coin.spark, width=3)
+        else:
+            text(d, (14, ry + 2), coin.symbol.upper(), F("cb", 17))
+            text(d, (14, ry + 21), _price(coin.price), F("cr", 16))
+            _pct(d, 430, ry + 2, coin.chg_pct)
+            _spark(d, 450, ry + 4, w - 14, ry + per - 6, coin.spark)
+        if i:
+            dotted(d, 12, w - 12, int(ry - 4), 3)
+    fy = h - 28
+    d.line((10, fy - 8, w - 10, fy - 8), fill=INK, width=1)
+    f = F("csb", 15)
+    dom = cr.btc_dominance
+    s = f"BTC DOMINANCE {dom:.1f}%" if dom is not None else "BTC DOMINANCE —"
+    text(d, (12, fy), s, f)
+    mc = cr.market_cap_chg_24h
+    if mc is not None:
+        x = 12 + tw(d, s, f) + 24
+        if abs(mc) >= 0.05:
+            tri(d, x, fy + 4, 8, mc > 0)
+            x += 13
+        text(d, (x, fy), f"GLOBAL MCAP 24H {abs(mc):.1f}%", f)
+    _tally(d, w - 12, fy, *cr.counts())
+    return c
+
+
 def detail_sky(ctx, size):
     c, d = canvas(size)
     w, h = size
@@ -1203,7 +1358,8 @@ def detail_sky(ctx, size):
     return c
 
 
-DETAILS = {"weather": detail_weather, "news": detail_news, "sports": detail_sports, "sky": detail_sky}
+DETAILS = {"weather": detail_weather, "news": detail_news, "sports": detail_sports,
+           "crypto": detail_crypto, "sky": detail_sky}
 
 
 def compose_page(ctx: Ctx, name: str) -> Image.Image:
@@ -1211,7 +1367,8 @@ def compose_page(ctx: Ctx, name: str) -> Image.Image:
     c.paste(header(ctx), (0, 0))
     # the strip becomes a page title bar with position dots
     s, d = canvas((W, STRIP_H))
-    titles = {"weather": "Weather", "news": "News & markets", "sports": "Scores & schedule", "sky": "Sky above"}
+    titles = {"weather": "Weather", "news": "News & markets", "sports": "Scores & schedule",
+              "crypto": "Crypto", "sky": "Sky above"}
     text(d, (14, STRIP_H / 2 - 1), titles.get(name, name).upper(), F("cb", 19), anchor="lm")
     hint = "SWIPE OR USE TABS" if ctx.cfg.get("tablet_mode") else "middle: back  ·  right: next  ·  left: home"
     text(d, (W - 14, STRIP_H / 2 - 1), hint, F("cm", 15), anchor="rm")

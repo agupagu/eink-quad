@@ -58,7 +58,7 @@ DEFAULTS = {
     "city": "Singapore",
     "lat": 1.3521, "lon": 103.8198,  # approximate city centre, not a home address
     "units": "C",
-    "slots": ["weather", "news", "sports", "sky"],
+    "slots": ["weather", "news", "sports", "crypto"],
     "interval_min": 10,          # the main cadence: every panel refreshes on this beat
     "sky_min": 10,               # plane panel can run faster (partial refresh, no flash)
     "live_fast": True,           # while a team is playing, sports refreshes every live_min
@@ -70,6 +70,7 @@ DEFAULTS = {
     "max_age_h": 18,
     "news_pages": 4,
     "tickers": ["^GSPC", "^DJI", "^IXIC", "SOXL"],
+    "coins": ["bitcoin", "ethereum", "solana"],   # CoinGecko ids for the crypto panel
     "teams": ["man_utd", "india_men", "f1", "cal_fb"],
     # your own ESPN teams: {"key": ["Label", "sport", "league", "espn team id or abbr"]},
     # e.g. {"bears": ["Bears", "football", "nfl", "chi"]}; then add "bears" to teams
@@ -191,7 +192,7 @@ def row_note(r):
 
 # ---------------------------------------------------------------- the board
 
-PAGES = ["quad", "weather", "news", "sports", "sky"]
+PAGES = ["quad", "weather", "news", "sports", "crypto", "sky"]
 
 
 class Board:
@@ -242,6 +243,8 @@ class Board:
         elif name == "news":
             self.snap["heads"] = S.headlines(cfg, force)
             self.snap["quotes"] = S.quotes(cfg, force)
+        elif name == "crypto":
+            self.snap["crypto"] = S.crypto(cfg, force)
         elif name == "sports":
             teams, live = S.sports(cfg, force)
             if cfg.get("sports_logos"):
@@ -277,7 +280,7 @@ class Board:
             t_f = t_f * 9 / 5 + 32
         return R.Ctx(now=now, cfg=cfg, weather=sn.get("weather"), heads=sn.get("heads") or [],
                      psi=sn.get("psi"),
-                     quotes=sn.get("quotes") or [], teams=sn.get("teams") or [], featured=sn.get("featured"),
+                     quotes=sn.get("quotes") or [], crypto=sn.get("crypto"), teams=sn.get("teams") or [], featured=sn.get("featured"),
                      recent=sn.get("recent") or [], day_count=sn.get("day_count", 0), nearby=sn.get("nearby") or [],
                      event=sn.get("event"), upcoming=sn.get("upcoming") or [], brief=sn.get("brief", ""),
                      sticky=sticky, indoor_f=t_f, indoor_rh=dv.get("rh"), battery=batt,
@@ -360,7 +363,7 @@ class Board:
         beat = int(now // iv)
         due = []
         if self.beats.get("main") != beat:
-            due = ["weather", "news", "sports", "sky", "brief"]
+            due = ["weather", "news", "sports", "crypto", "sky", "brief"]
             self.beats["main"] = beat
             with self.cond:
                 self.cycle += 1
@@ -451,7 +454,7 @@ class Board:
                     return self.redraw("home", major=True)
                 self.note_event("manual refresh")
         if b == 0:
-            for name in ("weather", "news", "sports", "sky"):
+            for name in ("weather", "news", "sports", "crypto", "sky"):
                 try:
                     self.take(name, force=True)
                 except Exception:
@@ -651,7 +654,7 @@ class H(BaseHTTPRequestHandler):
             }
         st["sources"] = {
             "weather": S._weather.status(), "psi": S._psi.status(), "alerts": S._alerts.status(), "news": S.news_status(),
-            "quotes": S.quotes_status(), "sports": S.sports_status(), "brief": S.brief_status(),
+            "quotes": S.quotes_status(), "crypto": S.crypto_status(), "sports": S.sports_status(), "brief": S.brief_status(),
             "sky": {"age_s": round(now - sky.updated_at) if sky and sky.updated_at else None,
                     "error": sky.last_error if sky else None},
             "events": events.status if events else None,
@@ -694,7 +697,7 @@ class H(BaseHTTPRequestHandler):
         if moved:
             start_sky()
         # data-shaping changes need a refetch; purely visual ones just a redraw
-        for name in ("weather", "news", "sports", "sky"):
+        for name in ("weather", "news", "sports", "crypto", "sky"):
             try:
                 board.take(name, force=name in ("weather",) and moved)
             except Exception:
@@ -794,7 +797,7 @@ class Server(ThreadingHTTPServer):
 
 
 def warm():
-    for name in ("weather", "news", "sports", "sky"):
+    for name in ("weather", "news", "sports", "crypto", "sky"):
         try:
             board.take(name)
         except Exception:

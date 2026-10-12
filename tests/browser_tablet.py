@@ -11,30 +11,45 @@ with sync_playwright() as p:
     errors=[]
     page.on('pageerror',lambda e:errors.append(str(e)))
     page.goto(URL,wait_until='networkidle')
+    def wake():
+        page.evaluate('()=>{document.body.classList.remove("chrome-hidden");clearTimeout(chromeTimer);}')
+    wake()
     page.wait_for_selector('.frame',timeout=30000)
     page.wait_for_timeout(900)
     assert page.locator('#quadrants').is_visible()
+    assert page.locator('nav [data-page]').count()==6
+    assert page.locator('nav [data-page]').evaluate_all('bs=>bs.map(b=>b.dataset.page)')==['quad','weather','news','sports','crypto','sky']
+    assert page.locator('#quadrants button').evaluate_all('bs=>bs.map(b=>b.dataset.page)')==['weather','news','sports','crypto']
     page.screenshot(path=str(ROOT/'eink-home-local.png'))
-    checks=['home loaded']
+    checks=['home loaded','six nav buttons in order','home quadrant mapping ends with crypto']
     page.evaluate('''window.phases=[]; new MutationObserver(()=>window.phases.push(document.querySelector('#stage').className)).observe(document.querySelector('#stage'),{attributes:true,attributeFilter:['class']})''')
     for name in ['weather','news','sky']:
+        wake()
         page.locator('nav [data-page='+name+']').click()
         page.wait_for_function('(id)=>document.querySelector(".frame")?.alt.startsWith(id)',arg={'weather':'Weather','news':'News','sky':'Sky'}[name])
         page.wait_for_timeout(800)
         assert page.locator('#stage').get_attribute('class')=='stage'
         checks.append(name+' loaded and refresh settled')
+    wake()
+    page.locator('nav [data-page=crypto]').click()
+    page.wait_for_function('document.querySelector(".frame")?.alt.startsWith("Crypto")')
+    page.wait_for_timeout(800)
+    assert page.locator('#stage').get_attribute('class')=='stage'
+    checks.append('crypto loaded and refresh settled')
     phases=page.evaluate('window.phases')
     for phase in ['phase-invert','phase-black','phase-white']:
         assert any(phase in item for item in phases), phases
     checks.append('real e-ink phase sequence observed')
     page.locator('nav [data-page=sports]').click()
-    page.wait_for_function('document.querySelectorAll(".card").length===4')
-    page.wait_for_function('!document.querySelector(".sports").innerText.includes("Awaiting feed data")')
+    page.wait_for_function('document.querySelectorAll(".srow").length===4')
+    page.wait_for_function('document.querySelector(".board-head")?.innerText.includes("SCORES")')
+    page.wait_for_function('!document.querySelector(".rows").innerText.includes("No upcoming event")')
     page.wait_for_timeout(1000)
     page.screenshot(path=str(ROOT/'eink-sports-local.png'))
-    logos=page.locator('.identity img').evaluate_all('(imgs)=>imgs.map(i=>({alt:i.alt,url:i.src,ok:i.complete&&i.naturalWidth>0}))')
+    logos=page.locator('.who img').evaluate_all('(imgs)=>imgs.map(i=>({alt:i.alt,url:i.src,ok:i.complete&&i.naturalWidth>0}))')
+    assert len(logos)==4 and all(l['ok'] for l in logos),logos
     checks.append('four sports and logos')
-    page.locator('.card[data-key=india_men]').click()
+    page.locator('.srow[data-key=india_men]').click()
     page.wait_for_selector('.detail[data-key=india_men]')
     assert page.url.split('?')[1].split('#')[0] == URL.split('?')[1].split('#')[0] if '?' in URL else True
     page.wait_for_timeout(700)
@@ -42,19 +57,28 @@ with sync_playwright() as p:
     page.keyboard.press('ArrowRight')
     page.wait_for_selector('.detail[data-key=man_utd]')
     page.wait_for_timeout(700)
+    wake()
     page.locator('#back').click()
-    page.wait_for_selector('.sports')
+    page.wait_for_selector('.board')
     page.wait_for_timeout(700)
-    page.locator('.card[data-key=india_men]').click()
+    page.locator('.srow[data-key=india_men]').click()
     page.emulate_media(reduced_motion='reduce')
     page.wait_for_selector('.detail[data-key=india_men]',timeout=3000)
     page.emulate_media(reduced_motion='no-preference')
+    wake()
     page.locator('#back').click()
-    page.wait_for_selector('.sports')
+    page.wait_for_selector('.board')
     page.wait_for_timeout(700)
     checks.append('cancelled refresh reconciles sports selection')
     assert page.evaluate('''async()=>{const original=frames.get('quad');const discarded=await rememberFrame('quad',original.blob,'obsolete',()=>false);return discarded===null&&frames.get('quad')===original;}''')
     checks.append('superseded decoder cannot replace frame cache')
+    page.evaluate('()=>{document.body.classList.remove("chrome-hidden");chromeSchedule();}')
+    page.wait_for_timeout(4400)
+    assert page.evaluate('document.body.classList.contains("chrome-hidden")')
+    page.evaluate('document.querySelector("#viewport").dispatchEvent(new PointerEvent("pointerdown",{clientX:20,clientY:20}))')
+    assert not page.evaluate('document.body.classList.contains("chrome-hidden")')
+    checks.append('floating overlays auto-hide on idle and return on edge tap')
+    wake()
     page.locator('#settings-open').click()
     page.locator('#paper').select_option('white')
     page.locator('#night').check()
@@ -62,9 +86,11 @@ with sync_playwright() as p:
     page.locator('#settings-close').click()
     assert page.locator('body').get_attribute('data-night')=='true'
     page.reload(wait_until='networkidle')
+    wake()
     assert page.locator('body').get_attribute('data-night')=='true'
     checks.append('display settings persist')
     page.emulate_media(reduced_motion='reduce')
+    wake()
     page.locator('#home').click()
     page.wait_for_selector('.frame')
     assert page.locator('#stage').get_attribute('class')=='stage'
@@ -81,11 +107,13 @@ with sync_playwright() as p:
     assert page.locator('.frame').get_attribute('src')==before
     checks.append('failed fetch retains decoded display')
     page.reload(wait_until='networkidle')
+    wake()
     page.wait_for_selector('.frame')
     page.wait_for_function('document.querySelector("#status").innerText.includes("last display retained")')
     checks.append('offline API reload recovers IndexedDB frame')
     page.unroute('**/api/tablet/**')
     page.evaluate('''()=>{window.fetch=(_url,options)=>new Promise((_resolve,reject)=>{options.signal.addEventListener('abort',()=>reject(new DOMException('Injected stalled request','AbortError')),{once:true});});}''')
+    wake()
     page.locator('#reload').click()
     page.wait_for_function('document.querySelector("#status").innerText.includes("timed out")',timeout=15000)
     assert page.locator('.frame').count()==1

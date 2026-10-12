@@ -127,6 +127,17 @@ class SportTests(unittest.TestCase):
                     urllib.request.urlopen(base + "/api/tablet/sports", timeout=5)
                 self.assertEqual(rejected_sports.exception.code, 404)
                 rejected_sports.exception.close()
+                # Tailscale Funnel: a public .ts.net Host must present the token.
+                funnel_no_token = urllib.request.Request(
+                    base + "/tablet", headers={"Host": "board.someshies.ts.net"})
+                with self.assertRaises(urllib.error.HTTPError) as rejected_funnel:
+                    urllib.request.urlopen(funnel_no_token, timeout=5)
+                self.assertEqual(rejected_funnel.exception.code, 404)
+                rejected_funnel.exception.close()
+                funnel_ok = urllib.request.Request(
+                    base + "/tablet?k=local-tablet", headers={"Host": "board.someshies.ts.net"})
+                with urllib.request.urlopen(funnel_ok, timeout=5) as r:
+                    self.assertEqual(r.status, 200)
                 with urllib.request.urlopen(base + "/api/tablet/frame?page=sports&k=local-tablet", timeout=5) as r:
                     self.assertEqual(r.headers["Content-Type"], "image/png")
                     version = r.headers["X-Version"]

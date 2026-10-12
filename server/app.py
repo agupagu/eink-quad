@@ -488,6 +488,92 @@ def scheduler():
         time.sleep(5)
 
 
+# ---------------------------------------------------------------- tablet JSON data API
+
+DATA_PAGES = ("weather", "news", "crypto", "sky")
+
+
+def _stride(pts, limit=120):
+    """Plain striding downsample for sparklines; never invents or blends points."""
+    pts = list(pts)
+    if len(pts) <= limit:
+        return pts
+    return pts[::-(-len(pts) // limit)]    # every ceil(n/limit)-th point
+
+
+def _sighting_json(s):
+    return {"callsign": s.callsign, "airline": s.airline, "flight_no": s.flight_no,
+            "origin": s.origin, "dest": s.dest, "origin_city": s.origin_city,
+            "dest_city": s.dest_city, "alt_ft": s.alt_ft, "speed_kt": s.speed_kt,
+            "aircraft": s.aircraft, "bearing": s.bearing, "elev_deg": s.elev_deg,
+            "progress": s.progress, "eta_min": s.eta_min}
+
+
+def _event_json(e):
+    if e is None:
+        return None
+    return {"kind": e.kind, "title": e.title, "subtitle": e.subtitle, "start": e.start,
+            "end": e.end, "bearing": e.bearing, "where": e.where, "height": e.height,
+            "max_elev": e.max_elev, "confidence": e.confidence, "detail": e.detail,
+            "duration_s": e.duration_s}
+
+
+def tablet_data(page):
+    """Read-only JSON snapshot for the native tablet screens, copied out of the
+    board's existing data snapshots. Called with board.cond held; it reads only
+    cached values (never fetches), so the lock is held for microseconds."""
+    sn = board.snap
+    now = time.time()
+    if page == "weather":
+        w = sn.get("weather")
+        # the same source render's _ctx_psi uses: weather's own psi, else the
+        # board's psi snapshot, else an empty reading
+        psi = getattr(w, "psi", None) or sn.get("psi") or S.Psi()
+        return {
+            "temp": w.temp if w else None, "feels": w.feels if w else None,
+            "code": w.code if w else None, "is_day": w.is_day if w else None,
+            "humidity": w.humidity if w else None, "wind": w.wind if w else None,
+            "wind_dir": w.wind_dir if w else None, "gust": w.gust if w else None,
+            "days": [{"date": d.date, "hi": d.hi, "lo": d.lo, "code": d.code,
+                      "pop": d.pop, "sunrise": d.sunrise, "sunset": d.sunset}
+                     for d in (w.days if w else [])],
+            "hourly": [[t, temp, pop, code] for t, temp, pop, code
+                       in ((w.hourly if w else []))
+                       if now - 3600 <= t <= now + 24 * 3600],
+            "rain_note": w.rain_note if w else "",
+            "psi": {"values": dict(psi.values),
+                    "timestamp_iso": psi.timestamp.isoformat() if psi.timestamp else None,
+                    "stale": psi.stale(now), "error": psi.error},
+        }
+    if page == "news":
+        return {"quotes": [{"symbol": q.symbol, "name": q.name, "price": q.price,
+                            "prev": q.prev, "chg_pct": q.chg_pct,
+                            "spark": list(q.spark)[-40:], "state": q.state}
+                           for q in sn.get("quotes") or []],
+                "heads": [h.title for h in sn.get("heads") or []],
+                "cycle": board.cycle}
+    if page == "crypto":
+        c = sn.get("crypto")
+        coins = c.coins if c else {}
+        order = [cid for cid in cfg.get("coins", []) if cid in coins]
+        order += [cid for cid in coins if cid not in order]
+        return {"coins": [{"id": cid, "symbol": coins[cid].symbol,
+                           "name": coins[cid].name, "price": coins[cid].price,
+                           "chg24": coins[cid].chg_pct,
+                           "spark": _stride(coins[cid].spark)} for cid in order],
+                "btc_dominance": c.btc_dominance if c else None,
+                "mcap24": c.market_cap_chg_24h if c else None,
+                "updated": c.fetched if c else 0.0,
+                "error": c.error if c else None}
+    # sky
+    featured = sn.get("featured")
+    return {"featured": _sighting_json(featured) if featured else None,
+            "recent_count": len(sn.get("recent") or []),
+            "day_count": sn.get("day_count", 0),
+            "event": _event_json(sn.get("event")),
+            "upcoming": [_event_json(e) for e in sn.get("upcoming") or []]}
+
+
 # ---------------------------------------------------------------- HTTP
 
 class H(BaseHTTPRequestHandler):
@@ -536,10 +622,14 @@ class H(BaseHTTPRequestHandler):
                 return self.device_poll()
             if p == "/healthz":
                 return self.send(200, "ok", "text/plain")
-            if p in ("/tablet", "/tablet/legacy", "/api/tablet/frame", "/api/tablet/sports", "/tablet/india-cricket.svg"):
+            if p in ("/tablet", "/tablet/legacy", "/api/tablet/frame", "/api/tablet/sports",
+                     "/api/tablet/data", "/tablet/india-cricket.svg"):
                 # Read-only screen on a Tailnet bind needs no URL credential;
-                # other binds require a distinct tablet token.
-                tailnet = (BIND.startswith("100.")
+                # other binds require a distinct tablet token. Tailscale Funnel
+                # traffic enters from 100.x too, so a .ts.net Host must still
+                # present the token — the URL is public, the board is not.
+                funnel = (self.headers.get("Host") or "").split(":")[0].lower().endswith(".ts.net")
+                tailnet = (not funnel and BIND.startswith("100.")
                            and ipaddress.ip_address(BIND) in ipaddress.ip_network("100.64.0.0/10")
                            and ipaddress.ip_address(self.client_address[0]) in ipaddress.ip_network("100.64.0.0/10"))
                 if not tailnet and (not TABLET_TOKEN or self.q().get("k") != TABLET_TOKEN):
@@ -579,6 +669,16 @@ class H(BaseHTTPRequestHandler):
                                  "next": game(cached[key].next) if key in cached else None}
                                 for key in ("man_utd", "india_men", "f1", "cal_fb")]
                     return self.send(200, {"sports": rows, "updated": board.updated})
+                if p == "/api/tablet/data":
+                    page = self.q().get("page")
+                    if page not in DATA_PAGES:
+                        return self.send(400, {"error": "invalid page"})
+                    with board.cond:
+                        version = board.version
+                        if self.q().get("v") == str(version):
+                            return self.send(204, b"", headers={"X-Version": version})
+                        payload = tablet_data(page)
+                    return self.send(200, payload, headers={"X-Version": version})
                 page = self.q().get("page", "quad")
                 if page not in PAGES:
                     return self.send(400, {"error": "invalid page"})

@@ -24,7 +24,7 @@ import traceback
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-os.environ.setdefault("TZ", "America/New_York")
+os.environ.setdefault("TZ", "Asia/Singapore")
 if hasattr(time, "tzset"):
     time.tzset()
 
@@ -41,18 +41,20 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("QUAD_PORT", "8740"))
 BIND = os.environ.get("QUAD_BIND", "127.0.0.1")
 DEVICE_TOKEN = os.environ.get("QUAD_TOKEN", "dev")
+TABLET_TOKEN = os.environ.get("QUAD_TABLET_TOKEN", "")  # distinct, read-only; unset disables viewer
 ADMIN_TOKEN = os.environ.get("QUAD_ADMIN", "admin")
 CONFIG_PATH = os.environ.get("QUAD_CONFIG", os.path.join(HERE, "config.json"))
 STATE_PATH = os.environ.get("QUAD_STATE", os.path.join(HERE, "state.json"))
 NOTES_DB = os.environ.get("QUAD_NOTES_DB", "")           # the note box's sqlite, optional
 NOTEBOX_DIR = os.environ.get("QUAD_NOTEBOX_DIR", "")     # to borrow its renderer
 DASH_HTML = os.path.join(HERE, "web", "dashboard.html")
+TABLET_HTML = os.path.join(HERE, "web", "tablet.html")
 
 DEFAULTS = {
     "label": "Home",
-    "city": "Tampa",             # named in the Claude brief's prompt
-    "lat": 27.9506, "lon": -82.4572,
-    "units": "F",
+    "city": "Singapore",
+    "lat": 1.3521, "lon": 103.8198,  # approximate city centre, not a home address
+    "units": "C",
     "slots": ["weather", "news", "sports", "sky"],
     "interval_min": 10,          # the main cadence: every panel refreshes on this beat
     "sky_min": 10,               # plane panel can run faster (partial refresh, no flash)
@@ -65,18 +67,18 @@ DEFAULTS = {
     "max_age_h": 18,
     "news_pages": 4,
     "tickers": ["^GSPC", "^DJI", "^IXIC", "SOXL"],
-    "teams": ["bucs", "lightning", "rays", "gators_fb", "gators_bb"],
+    "teams": ["man_utd", "india_men", "f1", "cal_fb"],
     # your own ESPN teams: {"key": ["Label", "sport", "league", "espn team id or abbr"]},
     # e.g. {"bears": ["Bears", "football", "nfl", "chi"]}; then add "bears" to teams
     "custom_teams": {},
     "horizon_days": 21,
-    "show_idle": False,
+    "show_idle": True,         # keep India visible outside active series windows
     "sports_logos": True,
     "odds": True,
     "odds_style": "spread",      # spread | moneyline | winpct (hockey/baseball always moneyline)
     "radar_nm": 25,
     "iss": True, "launch": True,
-    "llm_brief": True,
+    "llm_brief": False,        # opt-in; no paid CLI or implicit external prompt
     "llm_brief_min": 60,
     "llm_model": "claude-haiku-4-5-20251001",
     "page_timeout_s": 180,       # detail pages fall back to the quad after this
@@ -526,6 +528,19 @@ class H(BaseHTTPRequestHandler):
                 return self.device_poll()
             if p == "/healthz":
                 return self.send(200, "ok", "text/plain")
+            if p in ("/tablet", "/api/tablet/frame"):
+                if not TABLET_TOKEN or self.q().get("k") != TABLET_TOKEN:
+                    return self.send(404, {"error": "not found"})
+                if p == "/tablet":
+                    with open(TABLET_HTML, "rb") as f:
+                        return self.send(200, f.read(), "text/html; charset=utf-8",
+                                         {"Referrer-Policy": "no-referrer"})
+                page = self.q().get("page", "quad")
+                if page not in PAGES:
+                    return self.send(400, {"error": "invalid page"})
+                with board.cond:
+                    img, version = R.compose(board.ctx(page=page)), board.version
+                return self.png(img, {"X-Version": version})
             if not self.admin():
                 return self.send(404, {"error": "not found"})
             if p in ("/", "/index.html"):

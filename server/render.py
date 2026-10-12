@@ -572,6 +572,16 @@ def _sport(r):
 def _team_lines(r, cfg=None):
     """(badge, primary, secondary) for one TeamRow."""
     cfg = cfg or {}
+    if r.key in ("india_men", "f1"):
+        g = r.live or r.next or r.last
+        if not g:
+            return None, "No active fixture in feed", "Check again later"
+        if r.key == "f1":
+            return ("LIVE" if r.live else None), g.opp_name, "Weekend begins " + when(g.start, g.time_tbd)
+        return ("LIVE" if r.live else None), (
+            g.detail if r.live and g.detail else
+            f"{when(g.start, g.time_tbd)} vs {g.opp_name}" if r.next else
+            f"Last: {g.opp_name}"), g.note
 
     def score(g):
         return f"{g.us}–{g.them}"
@@ -1009,6 +1019,20 @@ def detail_sports(ctx, size):
             text(d, (16, y + 4), r.label.upper(), F("cb", 28))
             text(d, (16, y + 36), r.record, F("cm", 17))
         x = 190
+        if r.key in ("india_men", "f1"):
+            g = r.live or r.next or r.last
+            if g:
+                heading = g.opp_name if r.key == "f1" else f"India vs {g.opp_name}"
+                text(d, (x, y + 5), ellipsize(d, heading, F("sb", 23), w - x - 18), F("sb", 23))
+                info = (g.detail + " · " if r.live and g.detail else "") + (
+                    "Weekend begins " if r.key == "f1" else "") + when(g.start, g.time_tbd)
+                text(d, (x, y + 38), ellipsize(d, info + " · " + g.note, F("m", 17), w - x - 18), F("m", 17))
+            else:
+                text(d, (x, y + 16), "No active fixture in feed", F("m", 19))
+            y += rh
+            if i < n - 1:
+                dotted(d, 12, w - 12, int(y - 4), 3)
+            continue
         if r.live:
             g = r.live
             xx = pill(d, x, y + 4, "LIVE", F("cb", 20), h=28) + 10

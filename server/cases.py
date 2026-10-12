@@ -1,11 +1,13 @@
 """Render every screen with live data (plus fake sky cases) to PNGs for eyeballing.
 python3 cases.py  ->  case_*.png"""
 import os, time
-os.environ.setdefault("TZ", "America/New_York"); time.tzset()
+os.environ.setdefault("TZ", "Asia/Singapore"); time.tzset()
 import render as R, sources as S, skyevents
 
-CFG = {"lat": 27.9506, "lon": -82.4572, "feeds": ["world", "us", "markets"],
-       "tickers": ["^GSPC", "^DJI", "^IXIC", "SOXL"], "teams": ["bucs", "lightning", "rays", "gators_fb", "gators_bb"],
+CFG = {"lat": 1.3521, "lon": 103.8198, "city": "Singapore", "units": "C",
+       "feeds": ["world", "us", "markets"], "show_idle": True,
+       "tickers": ["^GSPC", "^DJI", "^IXIC", "SOXL"],
+       "teams": ["man_utd", "india_men", "f1", "cal_fb"],
        "slots": ["weather", "news", "sports", "sky"], "radar_nm": 25}
 now = time.time()
 wx = S.weather(CFG); heads = S.headlines(CFG); qs = S.quotes(CFG); teams, _ = S.sports(CFG)

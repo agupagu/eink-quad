@@ -193,7 +193,7 @@ def weather(cfg, force=False) -> Weather | None:
         return _fetch_alerts(lat, lon)
 
     w = _weather.get(fetch_weather, force)
-    a = _alerts.get(fetch_alerts, force)
+    a = _alerts.get(fetch_alerts, force) if (24 <= lat <= 50 and -125 <= lon <= -66) else []
     if w is not None:
         w.alerts = a or []
     return w
@@ -363,12 +363,10 @@ def quotes_status():
 
 # (key, label, sport, league, espn team id)
 TEAMS = {
-    "bucs": ("Bucs", "football", "nfl", "tb"),
-    "lightning": ("Lightning", "hockey", "nhl", "tb"),
-    "rays": ("Rays", "baseball", "mlb", "tb"),
-    "gators_fb": ("Gators", "football", "college-football", "57"),
-    "gators_bb": ("Gators Hoops", "basketball", "mens-college-basketball", "57"),
-    "gators_wbb": ("Gators WBB", "basketball", "womens-college-basketball", "57"),
+    "man_utd": ("Man United", "soccer", "eng.1", "360"),
+    "india_men": ("India Men", "cricket", "international", "IND"),
+    "f1": ("Formula 1", "racing", "f1", "f1"),
+    "cal_fb": ("Cal Bears", "football", "college-football", "25"),
 }
 
 
@@ -475,6 +473,10 @@ def _parse_event(key, e, record=""):
 
 def _fetch_team(key):
     label, sport, league, tid = TEAMS[key]
+    if key == "india_men":
+        return _fetch_india_men()
+    if key == "f1":
+        return _fetch_f1()
     base = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams/{tid}"
     t = _espn(base)["team"]
     rec = ""
@@ -503,6 +505,56 @@ def _fetch_team(key):
     return out
 
 
+def _fetch_f1():
+    """ESPN season calendar; a race isn't a two-team scored match."""
+    year = time.gmtime().tm_year
+    data = _espn("https://site.api.espn.com/apis/site/v2/sports/racing/f1/scoreboard",
+                 {"dates": str(year)})
+    games = []
+    logo = "https://a.espncdn.com/i/teamlogos/leagues/500/f1.png"
+    for event in data.get("events", []):
+        race = event.get("name", "Grand Prix")
+        status = event.get("status", {}).get("type", {})
+        start = calendar.timegm(time.strptime(event["date"][:16], "%Y-%m-%dT%H:%M"))
+        games.append(Game(team="Formula 1", abbr="F1", opp="GP", opp_name=race,
+                          home=True, start=start, state=status.get("state", "pre"),
+                          detail=status.get("shortDetail", ""), note=race,
+                          our_logo=logo, event_id=str(event.get("id", ""))))
+    return sorted(games, key=lambda g: g.start)
+
+
+def _fetch_india_men():
+    """ESPN Cricinfo active series; preserve innings scores as text."""
+    data = _espn("https://site.api.espn.com/apis/personalized/v2/scoreboard/header",
+                 {"sport": "cricket", "region": "in", "tz": "Asia/Calcutta"})
+    games = []
+    for sport in data.get("sports", []):
+        for league in sport.get("leagues", []):
+            if "women" in league.get("name", "").lower():
+                continue
+            for event in league.get("events", []):
+                if "women" in event.get("name", "").lower():
+                    continue
+                competitors = event.get("competitors") or []
+                ours = next((c for c in competitors if c.get("abbreviation", "").upper() == "IND"), None)
+                if ours is None:
+                    continue
+                other = next((c for c in competitors if c is not ours), {})
+                start = calendar.timegm(time.strptime(event["date"][:16], "%Y-%m-%dT%H:%M"))
+                state = event.get("status", "pre")
+                if isinstance(state, dict):
+                    state = state.get("type", {}).get("state", "pre")
+                score = " · ".join(f"{c.get('abbreviation', '?')} {c.get('score')}"
+                                   for c in competitors if c.get("score"))
+                games.append(Game(team="India Men", abbr="IND", opp=other.get("abbreviation", "TBD"),
+                                  opp_name=other.get("name", "TBD"), home=ours.get("homeAway") == "home",
+                                  start=start, state=state if state in ("pre", "in", "post") else "pre",
+                                  detail=score or event.get("summary", ""), note=league.get("name", ""),
+                                  our_logo=ours.get("logo", ""), opp_logo=other.get("logo", ""),
+                                  event_id=str(event.get("id", ""))))
+    return sorted({g.event_id: g for g in games}.values(), key=lambda g: g.start)
+
+
 _teams: dict[str, Cached] = {}
 
 
@@ -511,6 +563,8 @@ def _fetch_team_news(key):
     The feed mixes in league-wide roundups (power rankings, bracketology: 30-88 teams tagged)
     and video clips; drop both. College stories tag team + university under one teamId."""
     _, sport, league, tid = TEAMS[key]
+    if key in ("india_men", "f1"):
+        return []  # no team-specific ESPN news endpoint for these competitions
     d = _espn(f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/news", {"team": tid, "limit": 15})
     out = []
     for a in d.get("articles", []):
@@ -668,7 +722,7 @@ def sports(cfg, force=False):
         row.next = next((g for g in games if g.state == "pre" and g.start > now - 3 * 3600), None)
         if row.live:
             live.append(key)
-        if cfg.get("odds", True):
+        if cfg.get("odds", True) and key not in ("india_men", "f1"):
             try:
                 attach_odds(key, row.live)
                 if row.fresh_result:

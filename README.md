@@ -1,5 +1,34 @@
 # Quad Board
 
+## Singapore tablet fork
+
+This fork keeps the original four corners and **all four detail screens**
+(weather, news & markets, sports, sky). The sports screen now follows
+**Manchester United, India men's cricket, Formula 1 and Cal Bears football**.
+Manchester United and Cal use ESPN's team schedules; F1 uses ESPN's season
+calendar; India uses ESPN Cricinfo's *active series* header. When India has no
+match in that active feed, it says so rather than displaying a made-up fixture.
+F1 races and cricket innings are not rendered as American football scores.
+
+The default city and timezone are Singapore. Approximate Singapore city-centre
+coordinates are a placeholder; set your actual location privately in settings
+if you want useful plane-overhead data. The optional LLM brief is off by default.
+
+**Any spare Android tablet or iPad works as a screen; no root required.** Run the
+Python server as below, set a distinct `QUAD_TABLET_TOKEN`, then open
+`http://<your-server>/tablet?k=<QUAD_TABLET_TOKEN>` on
+the device. It serves a read-only viewer with Home plus four touch-selectable
+detail screens; it swaps preloaded frames in place every 15 seconds, without
+flashing the browser. The server continues to render pixels with Pillow at the
+original 800×480, scaled to fit your tablet. Keep the server behind Tailscale,
+HTTPS, or another private network, and change all example tokens before
+exposing it. Set `QUAD_TABLET_TOKEN` separately from `QUAD_TOKEN` and
+`QUAD_ADMIN`: the tablet token only grants image access. Do **not** put an
+admin token in the tablet URL. The original
+reTerminal E1001 firmware remains in the fork for anyone with that device.
+
+The original project and licence are by J-Rod-Ay; this is an independent fork.
+
 An e-paper kitchen dashboard for the Seeed reTerminal E1001. Four corners of your day on a 7.5" screen: the weather, the news and markets, your teams, and whatever is flying over the house right now.
 
 ![Quad Board cycling through its pages](docs/img/demo.gif)
@@ -62,7 +91,7 @@ Open `http://127.0.0.1:8740/?k=<QUAD_ADMIN>` to set your location, units, feeds,
 
 **Preview without hardware:** `python cases.py` renders every screen with live data to `case_*.png`.
 
-**Your teams:** the built-in keys are the Tampa ones (`bucs`, `lightning`, `rays`, `gators_fb`, `gators_bb`). Add your own in `config.json` with ESPN's sport, league and team id or abbreviation:
+**Your teams:** the default keys are `man_utd`, `india_men`, `f1`, and `cal_fb`. Add further ESPN teams in `config.json` with sport, league and team ID:
 
 ```json
 {

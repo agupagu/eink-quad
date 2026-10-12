@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#171713"><title>Quad Board · Tablet</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;background:#171713;color:#f5f0e3;font:14px system-ui,sans-serif;overflow:hidden}main{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100dvh;padding:8px 8px max(8px,env(safe-area-inset-bottom));gap:8px}#frame{display:block;max-width:100%;max-height:calc(100dvh - 64px);width:auto;height:auto;aspect-ratio:800/480;object-fit:contain;background:#f5f0e3}nav{display:flex;gap:4px;max-width:100%;overflow-x:auto}button{border:1px solid #5e5b52;background:#262722;color:#f5f0e3;border-radius:8px;padding:10px 14px;white-space:nowrap;font:inherit}button.active{background:#f5f0e3;color:#171713}#status{position:absolute;bottom:4px;right:7px;font-size:11px;opacity:.7}
+</style></head><body><main><img id="frame" alt="Quad Board screen"><nav aria-label="Screens"><button data-page="quad">Home</button><button data-page="weather">Weather</button><button data-page="news">News</button><button data-page="sports">Sports</button><button data-page="sky">Sky</button></nav></main><small id="status" role="status"></small>
+<script>
+const key=new URLSearchParams(location.search).get('k')||'';
+const pages=['quad','weather','news','sports','sky'];let page='quad',url='',lastVersion='',loading=false;
+const img=document.getElementById('frame'),status=document.getElementById('status');
+function select(next){if(!pages.includes(next))return;page=next;lastVersion='';document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===page));refresh()}
+async function refresh(){if(loading||!key)return;loading=true;const wanted=page;try{const r=await fetch('/api/tablet/frame?page='+wanted+'&k='+encodeURIComponent(key),{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);const version=r.headers.get('X-Version')||'';if(wanted===page&&version!==lastVersion){const blob=await r.blob();const next=URL.createObjectURL(blob);await new Promise((resolve,reject)=>{const preload=new Image();preload.onload=resolve;preload.onerror=reject;preload.src=next});if(wanted===page){const old=url;url=next;img.src=next;lastVersion=version;if(old)URL.revokeObjectURL(old)}else URL.revokeObjectURL(next)}status.textContent=''}catch(e){status.textContent='Offline · retrying'}finally{loading=false}}
+document.querySelectorAll('nav button').forEach(b=>b.addEventListener('click',()=>select(b.dataset.page)));
+select('quad');setInterval(refresh,15000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()});
+</script></body></html>

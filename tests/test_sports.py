@@ -89,6 +89,9 @@ class SportTests(unittest.TestCase):
                 with urllib.request.urlopen(base + "/tablet?k=local-tablet", timeout=5) as r:
                     page = r.read()
                     self.assertIn(b"apple-mobile-web-app-capable", page)
+                    self.assertIn(b'name="theme-color" content="#ffffff"', page)
+                    self.assertIn(b'filter:grayscale(1)', page)
+                    self.assertIn(b':root{color:#000;background:#fff}', page)
                     for key in S.TEAMS:
                         self.assertIn(f'data-key="{key}"'.encode(), page)
                 with urllib.request.urlopen(base + "/tablet/legacy?k=local-tablet", timeout=5) as r:

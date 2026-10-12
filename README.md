@@ -5,7 +5,9 @@
 This fork retains the original e-ink weather/news/sports/sky renderer at
 `/tablet/legacy`, but the **default iPad Home** is now a native-resolution 2×2
 sports grid: Manchester United, India men, F1 and Cal Bears each get a full
-quadrant. Tap a quadrant for its own detail screen; swipe between sports.
+quadrant. The iPad uses the original e-paper's monochrome look: white
+background, black ink, neutral grays and grayscale logos—no colored accents or
+beige cards. Tap a quadrant for its own detail screen; swipe between sports.
 Manchester United and Cal use ESPN's team schedules; F1 uses ESPN's season
 calendar; India now discovers series from ESPN's **dated** daily scoreboards for
 the next 14 days, then fetches each series' full fixture list and recent

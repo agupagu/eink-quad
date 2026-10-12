@@ -32,11 +32,28 @@ class SportTests(unittest.TestCase):
             {"name": "Women's World Cup", "events": [event("India Women v Australia")]},
         ]}]}
         with patch.object(S, "_espn", return_value=data):
-            games = S._fetch_india_men()
+            games = S._india_header_games(data)
         self.assertEqual(len(games), 1)
         self.assertIn("IND 178/5", games[0].detail)
         self.assertIsNone(games[0].us)
         self.assertEqual(games[0].opp, "AUS")
+
+    def test_dated_header_discovers_full_india_series(self):
+        daily = {"sports": [{"leagues": [{"id": "24289", "name": "West Indies tour of India",
+                 "events": [{"name": "India v West Indies", "competitors": [
+                     {"abbreviation": "IND"}, {"abbreviation": "WI"}]}]}]}]}
+        season = {"events": [{"id": "1529233", "name": "India v West Indies",
+                 "date": "2026-10-14T13:30Z", "status": {"type": {"state": "pre"}},
+                 "competitions": [{"competitors": [
+                     {"homeAway": "home", "team": {"abbreviation": "IND"}},
+                     {"homeAway": "away", "team": {"abbreviation": "WI", "location": "West Indies"}}]}]}]}
+        with patch.object(S, "_india_header_safe", return_value=daily), \
+             patch.object(S, "_espn", return_value=season):
+            games = S._india_series_calendar()
+        self.assertEqual(len(games), 1)
+        self.assertEqual(games[0].opp_name, "West Indies")
+        self.assertEqual(games[0].event_id, "1529233")
+        self.assertIsNone(games[0].us)
 
     def test_f1_calendar_never_fabricates_scores(self):
         data = {"events": [{"id": "77", "name": "Singapore Grand Prix",
@@ -76,6 +93,13 @@ class SportTests(unittest.TestCase):
                         self.assertIn(f'data-key="{key}"'.encode(), page)
                 with urllib.request.urlopen(base + "/tablet/legacy?k=local-tablet", timeout=5) as r:
                     self.assertIn(b'data-page="sports"', r.read())
+                with urllib.request.urlopen(base + "/tablet/india-cricket.svg?k=local-tablet", timeout=5) as r:
+                    self.assertEqual(r.headers["Content-Type"], "image/svg+xml")
+                    self.assertIn(b"<svg", r.read())
+                with self.assertRaises(urllib.error.HTTPError) as rejected_logo:
+                    urllib.request.urlopen(base + "/tablet/india-cricket.svg", timeout=5)
+                self.assertEqual(rejected_logo.exception.code, 404)
+                rejected_logo.exception.close()
                 with urllib.request.urlopen(base + "/api/tablet/sports?k=local-tablet", timeout=5) as r:
                     data = json.load(r)
                     self.assertEqual({row["key"] for row in data["sports"]}, set(S.TEAMS))

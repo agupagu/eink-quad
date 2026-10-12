@@ -51,6 +51,7 @@ NOTEBOX_DIR = os.environ.get("QUAD_NOTEBOX_DIR", "")     # to borrow its rendere
 DASH_HTML = os.path.join(HERE, "web", "dashboard.html")
 TABLET_HTML = os.path.join(HERE, "web", "tablet.html")
 IPAD_HTML = os.path.join(HERE, "web", "ipad.html")
+INDIA_LOGO_SVG = os.path.join(HERE, "web", "india-cricket.svg")
 
 DEFAULTS = {
     "label": "Home",
@@ -530,7 +531,7 @@ class H(BaseHTTPRequestHandler):
                 return self.device_poll()
             if p == "/healthz":
                 return self.send(200, "ok", "text/plain")
-            if p in ("/tablet", "/tablet/legacy", "/api/tablet/frame", "/api/tablet/sports"):
+            if p in ("/tablet", "/tablet/legacy", "/api/tablet/frame", "/api/tablet/sports", "/tablet/india-cricket.svg"):
                 # Read-only screen on a Tailnet bind needs no URL credential;
                 # other binds require a distinct tablet token.
                 tailnet = (BIND.startswith("100.")
@@ -546,6 +547,9 @@ class H(BaseHTTPRequestHandler):
                     with open(TABLET_HTML, "rb") as f:
                         return self.send(200, f.read(), "text/html; charset=utf-8",
                                          {"Referrer-Policy": "no-referrer"})
+                if p == "/tablet/india-cricket.svg":
+                    with open(INDIA_LOGO_SVG, "rb") as f:
+                        return self.send(200, f.read(), "image/svg+xml")
                 if p == "/api/tablet/sports":
                     def game(g):
                         if g is None:

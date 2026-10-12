@@ -7,8 +7,14 @@ This fork retains the original e-ink weather/news/sports/sky renderer at
 sports grid: Manchester United, India men, F1 and Cal Bears each get a full
 quadrant. Tap a quadrant for its own detail screen; swipe between sports.
 Manchester United and Cal use ESPN's team schedules; F1 uses ESPN's season
-calendar; India uses ESPN Cricinfo's *active series* header. When India has no
-match in that active feed, it says so rather than displaying a made-up fixture.
+calendar; India now discovers series from ESPN's **dated** daily scoreboards for
+the next 14 days, then fetches each series' full fixture list and recent
+innings scores. The undated active-series header alone missed upcoming matches
+such as India–West Indies on 14 October. Google search blocked automated
+scoreboard requests on this VPS, so we use the underlying structured ESPN
+sports feed rather than scraping Google HTML. The India iPad tile uses the
+BCCI crest from Wikimedia Commons (public-domain simple logo; trademark
+restrictions may still apply; source: https://commons.wikimedia.org/wiki/File:Board_of_Control_for_Cricket_in_India_Logo_(2024).svg).
 F1 races and cricket innings are not rendered as American football scores.
 
 The default city and timezone are Singapore. Approximate Singapore city-centre

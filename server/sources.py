@@ -9,6 +9,8 @@ Each source is a small cached fetcher. Rules shared by all of them:
 from __future__ import annotations
 
 import calendar
+import concurrent.futures
+import datetime
 import email.utils
 import html
 import json
@@ -523,10 +525,21 @@ def _fetch_f1():
     return sorted(games, key=lambda g: g.start)
 
 
-def _fetch_india_men():
-    """ESPN Cricinfo active series; preserve innings scores as text."""
-    data = _espn("https://site.api.espn.com/apis/personalized/v2/scoreboard/header",
-                 {"sport": "cricket", "region": "in", "tz": "Asia/Calcutta"})
+CRICKET_HEADER = "https://site.api.espn.com/apis/personalized/v2/scoreboard/header"
+INDIA_LOGO = "https://upload.wikimedia.org/wikipedia/commons/thumb/4/45/Board_of_Control_for_Cricket_in_India_Logo_%282024%29.svg/250px-Board_of_Control_for_Cricket_in_India_Logo_%282024%29.svg.png"
+_india_calendar = Cached(1800)
+_india_today = Cached(90)
+
+
+def _india_header(day=None):
+    params = {"sport": "cricket", "region": "in", "tz": "Asia/Calcutta"}
+    if day:
+        params["dates"] = day
+    return _espn(CRICKET_HEADER, params)
+
+
+def _india_header_games(data):
+    """Parse ESPN's daily cricket header without treating innings as football scores."""
     games = []
     for sport in data.get("sports", []):
         for league in sport.get("leagues", []):
@@ -550,9 +563,89 @@ def _fetch_india_men():
                                   opp_name=other.get("name", "TBD"), home=ours.get("homeAway") == "home",
                                   start=start, state=state if state in ("pre", "in", "post") else "pre",
                                   detail=score or event.get("summary", ""), note=league.get("name", ""),
-                                  our_logo=ours.get("logo", ""), opp_logo=other.get("logo", ""),
+                                  our_logo=INDIA_LOGO, opp_logo=other.get("logo", ""),
                                   event_id=str(event.get("id", ""))))
+    return games
+
+
+def _india_series_calendar():
+    """Discover men's series on upcoming days, then fetch their full season fixture lists.
+
+    ESPN's undated personalized header only covers active matches. The dated
+    header reveals Oct 14's India-WI match even when the undated feed is empty.
+    """
+    today = datetime.datetime.now(datetime.timezone.utc).date()
+    days = [(today + datetime.timedelta(days=i)).strftime("%Y%m%d") for i in range(15)]
+    leagues = {}
+    successes = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+        for data in pool.map(_india_header_safe, days):
+            if data is None:
+                continue
+            successes += 1
+            for sport in data.get("sports", []):
+                for league in sport.get("leagues", []):
+                    if "women" in league.get("name", "").lower():
+                        continue
+                    if any("women" not in e.get("name", "").lower() and
+                           any(c.get("abbreviation", "").upper() == "IND"
+                               for c in e.get("competitors") or [])
+                           for e in league.get("events", [])):
+                        leagues[str(league["id"])] = league.get("name", "")
+    if not successes:
+        raise RuntimeError("ESPN cricket dated feed unavailable")
+    games = []
+    for lid, league_name in leagues.items():
+        # ESPN's season scoreboard has *all* matches in this series, including
+        # previous scores and later fixtures, not just today's header cards.
+        for year in {today.year, (today + datetime.timedelta(days=14)).year}:
+            try:
+                data = _espn(f"https://site.api.espn.com/apis/site/v2/sports/cricket/{lid}/scoreboard",
+                             {"dates": str(year)})
+            except Exception:
+                continue
+            for event in data.get("events", []):
+                if "women" in event.get("name", "").lower():
+                    continue
+                comp = (event.get("competitions") or [{}])[0]
+                competitors = comp.get("competitors") or []
+                ours = next((c for c in competitors
+                             if c.get("team", {}).get("abbreviation", "").upper() == "IND"), None)
+                if ours is None:
+                    continue
+                other = next((c for c in competitors if c is not ours), {})
+                op = other.get("team", {})
+                st = event.get("status", {})
+                state = st.get("type", {}).get("state", "pre")
+                scores = " · ".join(f"{c.get('team', {}).get('abbreviation', '?')} {c['score']}"
+                                    for c in competitors if c.get("score"))
+                start = calendar.timegm(time.strptime(event["date"][:16], "%Y-%m-%dT%H:%M"))
+                games.append(Game(team="India Men", abbr="IND", opp=op.get("abbreviation", "TBD"),
+                                  opp_name=op.get("location") or op.get("displayName") or "TBD",
+                                  home=ours.get("homeAway") == "home", start=start,
+                                  state=state, detail=(scores + (" · " + st.get("summary", "")
+                                                          if state == "post" and st.get("summary") else ""))
+                                                       if scores else st.get("summary", ""),
+                                  note=league_name, our_logo=INDIA_LOGO,
+                                  opp_logo=op.get("logo", ""), event_id=str(event.get("id", ""))))
     return sorted({g.event_id: g for g in games}.values(), key=lambda g: g.start)
+
+
+def _india_header_safe(day):
+    try:
+        return _india_header(day)
+    except Exception:
+        return None
+
+
+def _fetch_india_men():
+    """Full discovered series calendar + fresh daily live innings."""
+    calendar_games = _india_calendar.get(_india_series_calendar) or []
+    today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d")
+    live_games = _india_today.get(lambda: _india_header_games(_india_header(today))) or []
+    # Daily feed wins for a live match; calendar supplies the rest of the series.
+    return sorted({g.event_id: g for g in calendar_games + live_games}.values(),
+                  key=lambda g: g.start)
 
 
 _teams: dict[str, Cached] = {}

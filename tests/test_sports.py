@@ -55,6 +55,32 @@ class SportTests(unittest.TestCase):
         self.assertEqual(games[0].event_id, "1529233")
         self.assertIsNone(games[0].us)
 
+    def test_fotmob_fixtures_cover_all_competitions(self):
+        fot = json.load(open(Path(__file__).parent / "fotmob-utd.json"))
+        with patch.object(S, "requests") as mock_requests, patch.object(S, "_espn", side_effect=AssertionError("no espn needed for parse")):
+            mock_requests.get.return_value.json.return_value = fot
+            games = S._fetch_fotmob_team("man_utd")
+        by_event = {g.event_id: g for g in games}
+        atletico = by_event["6106267"]
+        self.assertEqual(atletico.opp_name, "Atlético Madrid")
+        self.assertEqual(atletico.note, "Champions League")
+        self.assertFalse(atletico.home)
+        self.assertEqual(atletico.state, "pre")
+        self.assertIsNone(atletico.us)
+        self.assertIn("fotmob.com", atletico.opp_logo)
+        leeds = by_event["5795480"]          # league fixture, not the July friendly
+        self.assertEqual((leeds.opp_name, leeds.note, leeds.state), ("Leeds", "Premier League", "pre"))
+        wrexham = by_event["5449681"]
+        self.assertEqual((wrexham.state, wrexham.us, wrexham.them), ("post", 0, 1))
+        # record fetch failure must not kill the fixture fetch
+        with patch.object(S, "_fetch_fotmob_team", return_value=games), \
+             patch.object(S, "_fetch_espn_team", side_effect=RuntimeError("espn down")):
+            self.assertEqual(S._fetch_team("man_utd")[0].event_id, "5449681")
+        # both sources down -> empty, never raises into the board
+        with patch.object(S, "_fetch_fotmob_team", side_effect=RuntimeError("down")), \
+             patch.object(S, "_fetch_espn_team", return_value=[]):
+            self.assertEqual(S._fetch_team("man_utd"), [])
+
     def test_f1_calendar_never_fabricates_scores(self):
         data = {"events": [{"id": "77", "name": "Singapore Grand Prix",
                             "date": "2026-10-20T09:00:00Z", "status": {"type": {"state": "pre"}}}]}

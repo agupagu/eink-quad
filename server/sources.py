@@ -683,12 +683,82 @@ def _parse_event(key, e, record=""):
                 event_id=str(e.get("id", "")))
 
 
+FOTMOB_TEAM_IDS = {"man_utd": 10260}   # FotMob sees every competition; ESPN's league
+FOTMOB_LOGO = "https://images.fotmob.com/image_resources/logo/teamlogo/{}.png"  # endpoint misses e.g. Champions League
+FOTMOB_API = "https://www.fotmob.com/api/data/teams?id={}"
+
+
+def _fotmob_abbr(name):
+    words = [w for w in (name or "?").split() if w.strip()]
+    stem = "".join(c for c in words[-1] if c.isalpha())[:3] if words else "?"
+    return stem.upper()
+
+
+def _fetch_fotmob_team(key):
+    tid = FOTMOB_TEAM_IDS[key]
+    label, sport, league, _ = TEAMS[key]
+    r = requests.get(FOTMOB_API.format(tid), headers={"User-Agent": UA_BROWSER}, timeout=10)
+    r.raise_for_status()
+    af = (r.json().get("fixtures") or {}).get("allFixtures") or {}
+    games = []
+    for m in af.get("fixtures") or []:
+        st = m.get("status") or {}
+        if st.get("cancelled"):
+            continue
+        home, away = m.get("home") or {}, m.get("away") or {}
+        if away.get("id") == tid:
+            ours, theirs, home_game = away, home, False
+        elif home.get("id") == tid:
+            ours, theirs, home_game = home, away, True
+        else:
+            continue
+        try:
+            start = calendar.timegm(time.strptime(st.get("utcTime", "")[:19], "%Y-%m-%dT%H:%M:%S"))
+        except ValueError:
+            continue
+        started = bool(st.get("started"))
+        state = "post" if st.get("finished") else ("in" if started else "pre")
+        reason = (st.get("reason") or {}).get("short", "")
+        games.append(Game(
+            team=label, abbr="MUN" if key == "man_utd" else label[:3].upper(),
+            opp=_fotmob_abbr(theirs.get("name", "")), opp_name=theirs.get("name", "TBD"),
+            home=home_game, start=start, state=state,
+            detail=reason if state != "pre" else "",
+            us=int(ours.get("score")) if started and ours.get("score") is not None else None,
+            them=int(theirs.get("score")) if started and theirs.get("score") is not None else None,
+            note=(m.get("tournament") or {}).get("name", ""),
+            our_logo=FOTMOB_LOGO.format(tid), opp_logo=FOTMOB_LOGO.format(theirs.get("id", "")),
+            event_id=str(m.get("id", ""))))
+    if not games:
+        raise ValueError("no FotMob fixtures")
+    return sorted(games, key=lambda g: g.start)
+
+
 def _fetch_team(key):
     label, sport, league, tid = TEAMS[key]
     if key == "india_men":
         return _fetch_india_men()
     if key == "f1":
         return _fetch_f1()
+    if key in FOTMOB_TEAM_IDS:
+        # Record still comes from ESPN; fixtures from FotMob (all competitions).
+        rec = ""
+        try:
+            espn_games = _fetch_espn_team(key, label, sport, league, tid)
+            rec = espn_games[0].record if espn_games else ""
+        except Exception:
+            pass
+        try:
+            out = _fetch_fotmob_team(key)
+        except Exception:
+            out = _fetch_espn_team(key, label, sport, league, tid)
+        for g in out:
+            g.record = rec
+        return out
+    return _fetch_espn_team(key, label, sport, league, tid)
+
+
+def _fetch_espn_team(key, label, sport, league, tid):
     base = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams/{tid}"
     t = _espn(base)["team"]
     rec = ""

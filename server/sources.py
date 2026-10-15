@@ -295,7 +295,13 @@ def weather(cfg, force=False) -> Weather | None:
 
 # ============================================================ news
 
+# Retain legacy keys for saved configurations and the admin feed selector.
+DEFAULT_NEWS_FEEDS = ["ft_macro", "markets", "fed", "coindesk", "ft_tech"]
 WSJ_FEEDS = {
+    "ft_macro": ("FT Economy", "https://www.ft.com/global-economy?format=rss"),
+    "ft_tech": ("FT Tech", "https://www.ft.com/technology?format=rss"),
+    "coindesk": ("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
+    "fed": ("Federal Reserve", "https://www.federalreserve.gov/feeds/press_monetary.xml"),
     "world": ("World", "https://feeds.content.dowjones.io/public/rss/RSSWorldNews"),
     "us": ("U.S.", "https://feeds.content.dowjones.io/public/rss/RSSUSnews"),
     "markets": ("Markets", "https://feeds.content.dowjones.io/public/rss/RSSMarketsMain"),
@@ -307,6 +313,39 @@ WSJ_FEEDS = {
 
 
 JUNK = re.compile(r"Roundup: Market Talk|^Best .*(Accounts|Rates|Cards)|Savings Accounts|CD Rates|Mortgage Rates Today|^WSJ (News|Podcast)|^The Journal\.|Crossword|^Opinion \|", re.I)
+
+
+# Match titles only: boilerplate summaries must not make unrelated news relevant.
+NEWS_NOISE = re.compile(
+    r"\b(presale|airdrop|giveaway|sponsored|price prediction|price forecast|"
+    r"best .{0,35}(?:buy|cards|accounts|rates)|\d+x (?:gem|token)|"
+    r"review|unboxing|shopping|horoscope|celebrity|divorce|"
+    r"prosecutors?|fraud network|sweepstakes|prize draw)\b", re.I)
+NEWS_TOPICS = {
+    "Tech": re.compile(r"\b(AI|artificial intelligence|semiconductors?|chips?|Nvidia|AMD|TSMC|"
+                       r"Broadcom|ASML|HBM|data cent(?:er|re)s?|hyperscalers?|photonics|"
+                       r"cloud computing|OpenAI|Anthropic|Microsoft|Alphabet|Google|Meta|"
+                       r"cybersecurity|export controls?|antitrust)\b", re.I),
+    "Crypto": re.compile(r"\b(bitcoin|ethereum|ether|solana|crypto(?:currency)?|stablecoins?|"
+                         r"DeFi|tokenization|tokenisation|blockchain|BTC|ETH|staking|"
+                         r"digital assets?|spot ETF)\b", re.I),
+    "Macro": re.compile(r"\b(Fed|FOMC|Federal Reserve|central banks?|ECB|BOJ|BOE|PBOC|"
+                        r"interest rates?|inflation|CPI|PCE|payrolls?|unemployment|GDP|"
+                        r"economic|economy|economies|recession|Treasur(?:y|ies)|bond|bonds|"
+                        r"yields?|dollar|liquidity|tariffs?|trade war|trade deal|sanctions?|"
+                        r"crude|oil|OPEC|LNG|gold|copper|commodit(?:y|ies)|debt|fiscal|"
+                        r"stock market|equities|S&P|Nasdaq|credit spreads?)\b", re.I),
+}
+
+
+def _news_topic(title):
+    if JUNK.search(title) or NEWS_NOISE.search(title):
+        return None
+    # Crypto beats generic tech terms such as blockchain infrastructure.
+    for topic in ("Crypto", "Tech", "Macro"):
+        if NEWS_TOPICS[topic].search(title):
+            return topic
+    return None
 
 
 @dataclass
@@ -328,6 +367,8 @@ def _fetch_feed(key):
     r = requests.get(url, headers={"User-Agent": UA_BROWSER}, timeout=10)
     r.raise_for_status()
     root = ET.fromstring(r.content)
+    if root.tag not in ("rss", "{http://www.w3.org/1999/02/22-rdf-syntax-ns#}RDF"):
+        raise ValueError("Source did not return an RSS feed")
     out = []
     for it in root.iter("item"):
         title = _clean(it.findtext("title"))
@@ -347,9 +388,9 @@ _feeds: dict[str, Cached] = {}
 
 
 def headlines(cfg, force=False) -> list[Headline]:
-    """Newest first across the chosen feeds, de-duplicated, within max_age_h."""
+    """Fresh, relevant headlines, interleaved Macro / Crypto / Tech."""
     items = []
-    for key in cfg.get("feeds", ["world", "us", "markets"]):
+    for key in cfg.get("feeds", DEFAULT_NEWS_FEEDS):
         if key not in WSJ_FEEDS:
             continue
         c = _feeds.setdefault(key, Cached(900))
@@ -358,14 +399,28 @@ def headlines(cfg, force=False) -> list[Headline]:
             return _fetch_feed(key)
         fetch.__name__ = f"feed_{key}"
         items += c.get(fetch, force) or []
-    cutoff = time.time() - cfg.get("max_age_h", 18) * 3600
-    seen, out = set(), []
+    now = time.time()
+    cutoff = now - cfg.get("max_age_h", 18) * 3600
+    seen, links = set(), set()
+    buckets = {topic: [] for topic in ("Macro", "Crypto", "Tech")}
     for h in sorted(items, key=lambda h: -h.published):
-        k = re.sub(r"\W+", "", h.title.lower())[:60]
-        if k in seen or (h.published and h.published < cutoff):
+        topic = _news_topic(h.title)
+        k = re.sub(r"\W+", "", h.title.lower())
+        link = h.link.split("?", 1)[0].rstrip("/")
+        if (not topic or k in seen or (link and link in links)
+                or not cutoff <= h.published <= now + 300):
             continue
         seen.add(k)
-        out.append(h)
+        if link:
+            links.add(link)
+        buckets[topic].append(Headline(h.title, f"{topic} · {h.section}",
+                                      h.published, h.summary, h.link))
+    out = []
+    # A prolific source cannot crowd the other interests off the first screen.
+    while any(buckets.values()):
+        for bucket in buckets.values():
+            if bucket:
+                out.append(bucket.pop(0))
     return out
 
 

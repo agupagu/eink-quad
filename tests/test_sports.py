@@ -128,6 +128,17 @@ class SportTests(unittest.TestCase):
                     urllib.request.urlopen(base + "/tablet/india-cricket.svg", timeout=5)
                 self.assertEqual(rejected_logo.exception.code, 404)
                 rejected_logo.exception.close()
+                for name in A.TABLET_FONTS:
+                    with urllib.request.urlopen(base + f"/tablet/fonts/{name}?k=local-tablet", timeout=5) as r:
+                        self.assertEqual(r.headers["Content-Type"], "font/ttf")
+                        self.assertEqual(r.read(), (Path(A.HERE) / "fonts" / name).read_bytes())
+                for path in ("/tablet/fonts/Barlow-Regular.ttf",
+                             "/tablet/fonts/../../app.py?k=local-tablet",
+                             "/tablet/fonts/Unknown.ttf?k=local-tablet"):
+                    with self.assertRaises(urllib.error.HTTPError) as rejected_font:
+                        urllib.request.urlopen(base + path, timeout=5)
+                    self.assertEqual(rejected_font.exception.code, 404)
+                    rejected_font.exception.close()
                 with urllib.request.urlopen(base + "/api/tablet/sports?k=local-tablet", timeout=5) as r:
                     data = json.load(r)
                     self.assertEqual({row["key"] for row in data["sports"]}, set(S.TEAMS))

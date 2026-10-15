@@ -52,6 +52,9 @@ DASH_HTML = os.path.join(HERE, "web", "dashboard.html")
 TABLET_HTML = os.path.join(HERE, "web", "tablet.html")
 IPAD_HTML = os.path.join(HERE, "web", "ipad.html")
 INDIA_LOGO_SVG = os.path.join(HERE, "web", "india-cricket.svg")
+TABLET_FONTS = {f"{family}-{weight}.ttf"
+                for family in ("Barlow", "BarlowCondensed")
+                for weight in ("Regular", "Medium", "SemiBold", "Bold")}
 
 DEFAULTS = {
     "label": "Home",
@@ -66,7 +69,7 @@ DEFAULTS = {
     "full_every_min": 120,       # one flashing full refresh this often, to wipe ghosting
     "quiet": "",                 # "23-6" = no scheduled updates overnight
     "dark": False,
-    "feeds": ["world", "us", "markets"],
+    "feeds": S.DEFAULT_NEWS_FEEDS.copy(),
     "max_age_h": 18,
     "news_pages": 4,
     "tickers": ["^GSPC", "^DJI", "^IXIC", "SOXL"],
@@ -623,7 +626,7 @@ class H(BaseHTTPRequestHandler):
             if p == "/healthz":
                 return self.send(200, "ok", "text/plain")
             if p in ("/tablet", "/tablet/legacy", "/api/tablet/frame", "/api/tablet/sports",
-                     "/api/tablet/data", "/tablet/india-cricket.svg"):
+                     "/api/tablet/data", "/tablet/india-cricket.svg") or p.startswith("/tablet/fonts/"):
                 # Read-only screen on a Tailnet bind needs no URL credential;
                 # other binds require a distinct tablet token. Tailscale Funnel
                 # traffic enters from 100.x too, so a .ts.net Host must still
@@ -634,6 +637,12 @@ class H(BaseHTTPRequestHandler):
                            and ipaddress.ip_address(self.client_address[0]) in ipaddress.ip_network("100.64.0.0/10"))
                 if not tailnet and (not TABLET_TOKEN or self.q().get("k") != TABLET_TOKEN):
                     return self.send(404, {"error": "not found"})
+                if p.startswith("/tablet/fonts/"):
+                    name = p.removeprefix("/tablet/fonts/")
+                    if name not in TABLET_FONTS:
+                        return self.send(404, {"error": "not found"})
+                    with open(os.path.join(HERE, "fonts", name), "rb") as f:
+                        return self.send(200, f.read(), "font/ttf")
                 if p == "/tablet":
                     with open(IPAD_HTML, "rb") as f:
                         return self.send(200, f.read(), "text/html; charset=utf-8",

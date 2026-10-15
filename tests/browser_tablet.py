@@ -5,7 +5,6 @@ import os
 import atexit
 import struct
 import threading
-import time
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
@@ -19,25 +18,10 @@ REPO=Path(__file__).resolve().parents[1]
 def start_fixture_server():
     def chunk(kind, data):
         return struct.pack('!I',len(data))+kind+data+struct.pack('!I',zlib.crc32(kind+data))
-    png=(b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('!2I5B',800,480,8,0,0,0,0))
-         +chunk(b'IDAT',zlib.compress((b'\0'+b'\xff'*800)*480))+chunk(b'IEND',b''))
-    svg=b'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48"><circle cx="24" cy="24" r="20" fill="black"/></svg>'
-    now=int(time.time())
-    sports=[]
-    for key,label,opponent in [('india_men','India Men','Australia'),('man_utd','Manchester United','Liverpool'),
-                               ('cal_fb','Cal Bears','Stanford'),('f1','Formula 1','United States GP')]:
-        game={'opponent':opponent,'start':now+3600,'home':True,'opp_logo':'/fixture-logo.svg',
-              'tv':'Sports TV','odds':{'details':'Fixture line','total':2.5,'win_pct':55}}
-        sports.append({'key':key,'label':label,'record':'6–2','logo':'/fixture-logo.svg',
-                       'news':'Browser fixture headline','live':None,
-                       'last':dict(game,start=now-86400,us=2,them=1,result='W'), 'next':game})
-
-    # Long-form non-scoreboard events must not be ellipsized or labelled "vs".
-    sports[0]['last'].update(us=None,them=None,
-        detail='India 387/6 (50 overs), Australia 384 all out (49.3 overs)')
-    sports[3]['last'].update(us=None,them=None,detail='Final',
-        opponent='Singapore Airlines Singapore Grand Prix')
-    sports[3]['next']['opponent']='MSC Cruises United States Grand Prix'
+    def png(shade):
+        return (b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('!2I5B',800,480,8,0,0,0,0))
+                +chunk(b'IDAT',zlib.compress((b'\0'+bytes([shade])*800)*480))+chunk(b'IEND',b''))
+    sports=['india_men','man_utd','cal_fb','f1']
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):
@@ -46,7 +30,7 @@ def start_fixture_server():
         def do_GET(self):
             url=urlsplit(self.path)
             query=parse_qs(url.query)
-            if url.path!='/fixture-logo.svg' and query.get('k')!=['local-test']:
+            if query.get('k')!=['local-test']:
                 self.send_error(401)
                 return
             headers={}
@@ -56,19 +40,20 @@ def start_fixture_server():
             elif url.path.startswith('/tablet/fonts/') and url.path.removeprefix('/tablet/fonts/') in FONT_FILES:
                 content=(REPO/'server/fonts'/url.path.removeprefix('/tablet/fonts/')).read_bytes()
                 mime='font/ttf'
-            elif url.path in ('/tablet/india-cricket.svg','/fixture-logo.svg'):
-                content,mime=svg,'image/svg+xml'
-            elif url.path=='/api/tablet/sports':
-                content,mime=json.dumps({'sports':sports}).encode(),'application/json'
             elif url.path=='/api/tablet/frame':
-                version='fixture-'+query.get('page',['quad'])[0]
+                sport=query.get('sport',[None])[0]
+                if sport is not None and sport not in sports:
+                    self.send_error(400)
+                    return
+                name=query.get('page',['quad'])[0]
+                version='4470:'+name+(':'+ (sport or 'all') if name=='sports' else '')
                 headers={'X-Version':version}
                 if query.get('v')==[version]:
                     self.send_response(204)
                     self.send_header('X-Version',version)
                     self.end_headers()
                     return
-                content,mime=png,'image/png'
+                content,mime=png(255 if sport is None else 190+sports.index(sport)*10),'image/png'
             else:
                 self.send_error(404)
                 return
@@ -95,7 +80,8 @@ with sync_playwright() as p:
     errors=[]
     page.on('pageerror',lambda e:errors.append(str(e)))
     google_requests=[]
-    font_responses=[]
+    api_requests=[]
+    frame_responses=[]
     credential_leaks=[]
     def check_external_request(request):
         url=urlsplit(request.url)
@@ -109,14 +95,13 @@ with sync_playwright() as p:
         route.abort()
     page.route('https://fonts.googleapis.com/**',block_google)
     page.route('https://fonts.gstatic.com/**',block_google)
-    def capture_font(response):
-        url=urlsplit(response.url)
-        if url.path.startswith('/tablet/fonts/'):
-            # Never include viewer credentials in printed diagnostics.
-            font_responses.append({'file':url.path.rsplit('/',1)[-1], 'status':response.status,
-                                   'same_origin':url.netloc==urlsplit(URL).netloc,
-                                   'authorized':parse_qs(url.query).get('k')==parse_qs(urlsplit(URL).query).get('k')})
-    page.on('response',capture_font)
+    def capture_api(request):
+        url=urlsplit(request.url)
+        if url.path.startswith('/api/tablet/'):
+            api_requests.append((url.path,parse_qs(url.query)))
+    page.on('request',capture_api)
+    page.on('response',lambda response: frame_responses.append(response.status)
+            if urlsplit(response.url).path=='/api/tablet/frame' else None)
     page.goto(URL,wait_until='networkidle')
     def wake():
         page.evaluate('()=>{document.body.classList.remove("chrome-hidden");clearTimeout(chromeTimer);}')
@@ -142,14 +127,6 @@ with sync_playwright() as p:
         assert abs(geometry['y']-geometry['surfaceY'])<1,geometry
         assert geometry['scrollWidth']<=geometry['clientWidth']+1,geometry
         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
-    def font_style(selector,family,weight):
-        style=page.locator(selector).first.evaluate("""node=>{
-            const s=getComputedStyle(node);
-            return {family:s.fontFamily,weight:s.fontWeight,size:parseFloat(s.fontSize)};
-        }""")
-        assert style['family'].split(',')[0].strip('" ')==family,style
-        assert style['weight']==str(weight),style
-        return style
     page.evaluate('''window.phases=[]; new MutationObserver(()=>window.phases.push(document.querySelector('#stage').className)).observe(document.querySelector('#stage'),{attributes:true,attributeFilter:['class']})''')
     for name in ['weather','news','sky']:
         wake()
@@ -169,94 +146,113 @@ with sync_playwright() as p:
         assert any(phase in item for item in phases), phases
     checks.append('real e-ink phase sequence observed')
     page.locator('nav [data-page=sports]').click()
-    page.wait_for_function('document.querySelectorAll(".srow").length===4')
-    page.wait_for_function('document.querySelector(".board-head")?.innerText.includes("SCORES")')
-    page.wait_for_function('!document.querySelector(".rows").innerText.includes("No upcoming event")')
-    page.wait_for_timeout(1000)
-    # Force every declared face to load: CSS family names alone also pass
-    # when the browser silently renders a fallback.
-    loaded_fonts=page.evaluate("""async()=>{
-        const faces=await Promise.all(['Barlow','Barlow Condensed'].flatMap(family=>
-          [400,500,600,700].map(async weight=>{
-            const loaded=await document.fonts.load(`${weight} 24px "${family}"`);
-            return {family,weight,count:loaded.length,loaded:loaded.every(face=>face.status==='loaded')};
-          })));
-        await document.fonts.ready;
-        return faces;
-    }""")
-    assert len(loaded_fonts)==8 and all(f['count']==1 and f['loaded'] for f in loaded_fonts),loaded_fonts
-    assert {f['file'] for f in font_responses}==FONT_FILES,font_responses
-    assert all(f['status']==200 and f['same_origin'] and f['authorized'] for f in font_responses),font_responses
-    assert not google_requests,google_requests
-    assert not credential_leaks,credential_leaks
-    fills_surface('.board')
-    f1=page.locator('.srow[data-key=f1]')
-    assert 'vs ' not in f1.locator('.scoreline').inner_text()
-    assert 'vs ' not in f1.locator('.next-line').inner_text()
-    assert f1.locator('.wl').count()==0
-    assert page.locator('.srow[data-key=india_men] .wl').count()==0
-    for selector in ['.srow[data-key=f1] .scoreline','.srow[data-key=f1] .next-line',
-                     '.srow[data-key=india_men] .scoreline']:
-        wrapping=page.locator(selector).evaluate("""node=>{
-            const s=getComputedStyle(node);
-            return s.whiteSpace!=='nowrap' && s.textOverflow!=='ellipsis' && node.scrollWidth<=node.clientWidth+1;
-        }""")
-        assert wrapping,selector
-    checks.append('F1 race names without vs, cricket innings wrap, no cricket/F1 W-L badges')
-    font_style('.board-head' ,'Barlow Condensed',700)
-    font_style('.who h2','Barlow Condensed',700)
-    font_style('.scoreline','Barlow Condensed',600)
-    font_style('.next-line','Barlow',600)
-    font_style('.record','Barlow Condensed',500)
-    # Verify the documented render.py scale at its native 800px width.
-    page.set_viewport_size({'width':800,'height':480})
-    assert font_style('.who h2','Barlow Condensed',700)['size']==24
-    assert font_style('.scoreline','Barlow Condensed',600)['size']==21
-    assert font_style('.record','Barlow Condensed',500)['size']==17
-    fills_surface('.board')
-    for width,height in [(820,1180),(390,844)]:
+    def wait_frame(identity):
+        page.wait_for_function('(id)=>visiblePage===id&&surface.firstElementChild===frames.get(id)?.img',arg=identity)
+        page.wait_for_timeout(700)
+        assert page.locator('#surface > img.frame').count()==1
+        assert page.locator('.frame').evaluate('(n)=>n.complete&&n.naturalWidth===800&&n.naturalHeight===480')
+        assert page.locator('.board,.detail,.srow').count()==0
+        fills_surface('.frame')
+    wait_frame('sports')
+    assert page.locator('#sports-targets').is_visible()
+    assert page.locator('#quadrants').is_hidden()
+    assert page.locator('#sports-targets button').evaluate_all('ns=>ns.map(n=>n.dataset.sport)')==['india_men','man_utd','cal_fb','f1']
+    assert page.locator('.frame').evaluate('(n)=>getComputedStyle(n).objectFit')=='contain'
+    # Pixel coordinates are relative to the contained bitmap, including portrait letterboxing.
+    for width,height in [(1180,820),(800,480),(1600,600),(820,1180),(390,844)]:
         page.set_viewport_size({'width':width,'height':height})
-        fills_surface('.board')
-        for row in page.locator('.srow').all():
-            assert row.evaluate('(n)=>n.scrollWidth<=n.clientWidth+1')
-        page.screenshot(path=str(ROOT/f'eink-sports-{width}-portrait.png'))
+        page.wait_for_timeout(100)
+        fw=min(width,height*5/3)
+        fh=fw*3/5
+        overlay=page.locator('#sports-targets').bounding_box()
+        expected={'x':(width-fw)/2,'y':(height-fh)/2+fh*66/480,'width':fw,'height':fh*414/480}
+        assert all(abs(overlay[k]-v)<1 for k,v in expected.items()),(overlay,expected)
+        for index,row in enumerate(page.locator('#sports-targets button').all()):
+            rect=row.bounding_box()
+            assert abs(rect['height']-overlay['height']/4)<1
+            assert abs(rect['y']-(overlay['y']+index*overlay['height']/4))<1
+            assert row.evaluate('(n)=>getComputedStyle(n).backgroundColor')=='rgba(0, 0, 0, 0)'
+        fills_surface('.frame')
+        page.screenshot(path=str(ROOT/f'eink-sports-{width}x{height}.png'))
     page.set_viewport_size({'width':1180,'height':820})
-    checks.append('eight bundled font faces loaded with Google blocked, authenticated same-origin URLs and no external credential leaks')
-    checks.append('sports condensed headings/scores, renderer font sizes, full-width landscape and portrait rows')
-    page.screenshot(path=str(ROOT/'eink-sports-local.png'))
-    logos=page.locator('.who img').evaluate_all('(imgs)=>imgs.map(i=>({alt:i.alt,url:i.src.split("?")[0],ok:i.complete&&i.naturalWidth>0}))')
-    assert len(logos)==4 and all(l['ok'] for l in logos),logos
-    checks.append('four sports and logos')
-    page.locator('.srow[data-key=india_men]').click()
-    page.wait_for_selector('.detail[data-key=india_men]')
-    assert page.url.split('?')[1].split('#')[0] == URL.split('?')[1].split('#')[0] if '?' in URL else True
-    page.wait_for_timeout(700)
-    fills_surface('.detail')
-    font_style('.detail-heading h1','Barlow Condensed',700)
-    font_style('.detail-grid p','Barlow',500)
-    for width,height in [(820,1180),(390,844)]:
-        page.set_viewport_size({'width':width,'height':height})
-        fills_surface('.detail')
-        page.screenshot(path=str(ROOT/f'eink-sports-detail-{width}-portrait.png'))
-    page.set_viewport_size({'width':1180,'height':820})
-    checks.append('india details, title/body fonts, full-width portrait and token preservation')
+    checks.append('sports PNG with four transparent contain-fit row targets below y66 in landscape and portrait')
+    # Exercise every actual row target, then reuse the overview cache.
+    for sport in ['india_men','man_utd','cal_fb','f1']:
+        page.locator('#sports-targets [data-sport='+sport+']').click()
+        wait_frame('sports/'+sport)
+        assert page.locator('#sports-targets').is_hidden()
+        assert page.url.endswith('#sports/'+sport)
+        assert parse_qs(urlsplit(page.url).query)==parse_qs(urlsplit(URL).query)
+        page.keyboard.press('Escape')
+        wait_frame('sports')
+    assert page.evaluate("['sports','sports/india_men','sports/man_utd','sports/cal_fb','sports/f1'].every(id=>frames.has(id))")
+    assert page.evaluate("async()=>!(await sameBlob(frames.get('sports').blob,frames.get('sports/man_utd').blob))")
+    checks.append('all row taps load distinct focused PNGs and cache identities; Escape restores overview')
+    page.locator('#sports-targets [data-sport=india_men]').click()
+    wait_frame('sports/india_men')
     page.keyboard.press('ArrowRight')
-    page.wait_for_selector('.detail[data-key=man_utd]')
-    page.wait_for_timeout(700)
+    wait_frame('sports/man_utd')
+    wake()
+    page.locator('#next').click()
+    wait_frame('sports/cal_fb')
+    page.evaluate("""()=>{const v=document.querySelector('#viewport');
+        const start=new Event('touchstart'),end=new Event('touchend');
+        Object.defineProperty(start,'touches',{value:[{clientX:500,clientY:300}]});
+        Object.defineProperty(end,'changedTouches',{value:[{clientX:300,clientY:300}]});
+        v.dispatchEvent(start);v.dispatchEvent(end);} """)
+    wait_frame('sports/f1')
+    page.keyboard.press('ArrowRight')
+    wait_frame('sports/india_men')
+    page.keyboard.press('ArrowLeft')
+    wait_frame('sports/f1')
     wake()
     page.locator('#back').click()
-    page.wait_for_selector('.board')
-    page.wait_for_timeout(700)
-    page.locator('.srow[data-key=india_men]').click()
+    wait_frame('sports')
+    page.evaluate("location.hash='sports/man_utd'")
+    wait_frame('sports/man_utd')
+    page.reload(wait_until='networkidle')
+    wait_frame('sports/man_utd')
+    checks.append('focused arrows, swipe, wraparound, Back, hash and reload navigation')
+    # Focus and overview must each survive an offline API reload independently.
+    page.route('**/api/tablet/**',lambda route:route.abort())
+    for identity in ['sports/man_utd','sports','sports/f1']:
+        page.goto(URL+'#'+identity,wait_until='networkidle')
+        wait_frame(identity)
+        page.wait_for_function('document.querySelector("#status").innerText.includes("last display retained")')
+        assert page.locator('#sports-targets').is_hidden()==('/' in identity)
+    page.unroute('**/api/tablet/**')
+    checks.append('IndexedDB offline reload isolates overview and multiple focused sports frames')
+    # Cancellation must reconcile a cached target even before its full refresh commits.
+    page.evaluate("navigate('sports','india_men')")
     page.emulate_media(reduced_motion='reduce')
-    page.wait_for_selector('.detail[data-key=india_men]',timeout=3000)
+    wait_frame('sports/india_men')
     page.emulate_media(reduced_motion='no-preference')
+    # Hold an actual focused decode across superseding navigation, then release it.
+    page.evaluate("""()=>{window.originalReadyImage=readyImage;window.decodeHeld=false;
+        readyImage=async blob=>{const decoded=await originalReadyImage(blob);
+            window.decodeHeld=true;await new Promise(resolve=>window.releaseDecode=resolve);return decoded;};
+        frames.delete('sports/cal_fb');navigate('sports','cal_fb');}""")
+    page.wait_for_function('window.decodeHeld')
+    page.evaluate("navigate('sports','man_utd')")
+    wait_frame('sports/man_utd')
+    page.evaluate('()=>{readyImage=originalReadyImage;releaseDecode();}')
+    page.wait_for_timeout(300)
+    assert page.evaluate("!frames.has('sports/cal_fb')&&visiblePage==='sports/man_utd'")
+    checks.append('reduced-motion cancellation and superseded focused decoder retain navigation ownership')
+    page.evaluate("navigate('sports')")
+    wait_frame('sports')
     wake()
-    page.locator('#back').click()
-    page.wait_for_selector('.board')
-    page.wait_for_timeout(700)
-    checks.append('cancelled refresh reconciles sports selection')
-    assert page.evaluate('''async()=>{const original=frames.get('quad');const discarded=await rememberFrame('quad',original.blob,'obsolete',()=>false);return discarded===null&&frames.get('quad')===original;}''')
+    page.locator('#reload').click()
+    page.wait_for_function("document.querySelector('#status').innerText==='Sports'")
+    assert 204 in frame_responses
+    sports_requests=[q for path,q in api_requests if q.get('page')==['sports']]
+    assert any('sport' not in q for q in sports_requests)
+    assert {q['sport'][0] for q in sports_requests if 'sport' in q}=={'india_men','man_utd','cal_fb','f1'}
+    assert all(q.get('k')==['local-test'] for _,q in api_requests)
+    assert all(path=='/api/tablet/frame' for path,_ in api_requests)
+    assert any(q.get('v')==['4470:sports:man_utd'] and q.get('sport')==['man_utd'] for q in sports_requests)
+    checks.append('authenticated frame requests include sport and focus-specific conditional versions; no sports JSON requests')
+    assert page.evaluate('''async()=>{const original=frames.get('sports');const discarded=await rememberFrame('sports',original.blob,'obsolete',()=>false);return discarded===null&&frames.get('sports')===original;}''')
     checks.append('superseded decoder cannot replace frame cache')
     page.evaluate('()=>{document.body.classList.remove("chrome-hidden");chromeSchedule();}')
     page.wait_for_timeout(4400)
@@ -309,5 +305,5 @@ with sync_playwright() as p:
     assert not errors, errors
     assert not credential_leaks,credential_leaks
     assert not google_requests,google_requests
-    print(json.dumps({'checks':checks,'logos':logos,'fonts':loaded_fonts,'font_responses':font_responses,'errors':errors},indent=2))
+    print(json.dumps({'checks':checks,'errors':errors},indent=2))
     browser.close()

@@ -691,12 +691,16 @@ class H(BaseHTTPRequestHandler):
                 page = self.q().get("page", "quad")
                 if page not in PAGES:
                     return self.send(400, {"error": "invalid page"})
+                sport = self.q().get("sport", "")
+                if sport and (page != "sports" or sport not in ("india_men", "man_utd", "cal_fb", "f1")):
+                    return self.send(400, {"error": "invalid sport"})
                 with board.cond:
-                    version = board.version
+                    version = (f"{board.version}:sports:{sport or 'all'}"
+                               if page == "sports" else board.version)
                     if self.q().get("v") == str(version):
                         return self.send(204, b"", headers={"X-Version": version})
                     ctx = board.ctx(page=page)
-                    ctx.cfg = {**ctx.cfg, "tablet_mode": True}
+                    ctx.cfg = {**ctx.cfg, "tablet_mode": True, "sports_focus": sport}
                     img = R.compose(ctx)
                 return self.png(img, {"X-Version": version})
             if not self.admin():

@@ -1205,83 +1205,108 @@ def detail_news(ctx, size):
     return c
 
 
-def detail_sports(ctx, size):
+def _sports_game_title(row, game):
+    if row.key == "f1":
+        return game.opp_name
+    if row.key == "india_men":
+        return (game.detail if game.state != "pre" and game.detail
+                else f"India vs {game.opp_name}")
+    score = f"{game.us}–{game.them} " if game.us is not None and game.them is not None else ""
+    result = (game.result + " · ") if score and game.state == "post" and game.result else ""
+    return result + score + ("vs " if game.home else "at ") + game.opp_name
+
+
+def _sports_focus(ctx, size, row):
     c, d = canvas(size)
     w, h = size
-    teams = ctx.teams
-    if not teams:
-        text(d, (w / 2, h / 2), "No games in the next few weeks", F("m", 20), anchor="mm")
-        return c
-    n = min(6, len(teams))
-    rh = (h - 10) / n
-    y = 6
-    for i, r in enumerate(teams[:n]):
-        lsz = int(min(56, rh - 10))
-        if paste_logo(c, r.logo, 12, y + 2, lsz, ctx.cfg):
-            text(d, (22 + lsz, y + 4), r.label.upper(), F("cb", 24))
-            text(d, (22 + lsz, y + 32), r.record, F("cm", 17))
-        else:
-            text(d, (16, y + 4), r.label.upper(), F("cb", 28))
-            text(d, (16, y + 36), r.record, F("cm", 17))
-        x = 190
-        if r.key in ("india_men", "f1"):
-            g = r.live or r.next or r.last
-            if g:
-                heading = g.opp_name if r.key == "f1" else f"India vs {g.opp_name}"
-                text(d, (x, y + 5), ellipsize(d, heading, F("sb", 23), w - x - 18), F("sb", 23))
-                info = (g.detail + " · " if r.live and g.detail else "") + (
-                    "Weekend begins " if r.key == "f1" else "") + when(g.start, g.time_tbd)
-                text(d, (x, y + 38), ellipsize(d, info + " · " + g.note, F("m", 17), w - x - 18), F("m", 17))
-            else:
-                text(d, (x, y + 16), "No active fixture in feed", F("m", 19))
-            y += rh
-            if i < n - 1:
-                dotted(d, 12, w - 12, int(y - 4), 3)
+    has_logo = paste_logo(c, row.logo, 14, 12, 48, ctx.cfg)
+    x = 74 if has_logo else 14
+    text(d, (x, 12), row.label.upper(), F("cb", 28))
+    if row.record:
+        text(d, (x, 45), row.record, F("cm", 17))
+    for col, (label, game) in enumerate((("LIVE NOW" if row.live else "NEXT RACE" if row.key == "f1" else "NEXT FIXTURE", row.live or row.next),
+                                        ("PREVIOUS RESULT", row.last))):
+        x, y = 14 + col * 400, 86
+        width = 372
+        d.line((x, y - 8, x + width, y - 8), fill=INK, width=1)
+        text(d, (x, y), label, F("cb", 19))
+        y += 30
+        if not game:
+            text(d, (x, y), "No event listed in feed", F("m", 18))
             continue
-        if r.live:
-            g = r.live
-            xx = pill(d, x, y + 4, "LIVE", F("cb", 20), h=28) + 10
-            text(d, (xx, y + 2), f"{g.us}–{g.them} " + ("vs " if g.home else "at ") + g.opp_name, F("sb", 24))
-            text(d, (x, y + 38), g.detail + (f" · {g.tv}" if g.tv else ""), F("m", 17))
-        else:
-            if r.last:
-                g = r.last
-                if paste_logo(c, g.opp_logo, x, y + 4, 28, ctx.cfg):
-                    x += 36
-                xx = pill(d, x, y + 6, g.result or "–", F("cb", 18), h=24) + 8
-                s = f"{g.us}–{g.them} " + ("vs " if g.home else "at ") + g.opp_name
-                text(d, (xx, y + 4), s, F("sb", 21))
-                dt = time.strftime("%a %b ", time.localtime(g.start)) + str(time.localtime(g.start).tm_mday)
-                if g.ats and ctx.cfg.get("odds", True) and g.odds.spread_us is not None and _sport(r) not in ("hockey", "baseball"):
-                    dt += f" · {g.ats} {g.odds.spread_us:+g}"
-                text(d, (xx, y + 30), dt, F("cm", 16))
-            if r.next:
-                g = r.next
-                nx = 500
-                text(d, (nx, y + 4), "NEXT", F("cb", 15))
-                if paste_logo(c, g.opp_logo, w - 12 - 28, y + 2, 28, ctx.cfg):
-                    pass
-                s = when(g.start, g.time_tbd) + (" vs " if g.home else " at ") + g.opp_name
-                text(d, (nx, y + 22), ellipsize(d, s, F("sb", 19), w - nx - 12), F("sb", 19))
-                sub = " · ".join(b for b in (g.note, g.tv) if b)
-                ob = _odds_bits(g, g.abbr, ctx.cfg, _sport(r), full=True)
-                if ob:
-                    sub = " · ".join(b for b in (sub, " · ".join(ob)) if b)
-                if sub:
-                    text(d, (nx, y + 44), ellipsize(d, sub, F("cm", 16), w - nx - 12), F("cm", 16))
-                if ob and g.odds.book:
-                    text(d, (nx, y + 63), g.odds.book, F("cr", 13))
-            if r.news:
-                # under the last result, stopping short of the NEXT column; no result yet = use its slot
-                fn = F("cm", 16)
-                hy = y + 52 if r.last else y + 6
-                for j, ln in enumerate(wrap(d, "» " + r.news, fn, 300, 2 if rh - (hy - y) >= 42 or not r.last else 1)):
-                    text(d, (190 + (12 if j else 0), hy + j * 18), ln, fn)
-        y += rh
-        if i < n - 1:
-            dotted(d, 12, w - 12, int(y - 4), 3)
+        # Future events have no score; completed cricket keeps innings/result text.
+        title = _sports_game_title(row, game)
+        for line in wrap(d, title, F("sb", 22), width, 4):
+            text(d, (x, y), line, F("sb", 22))
+            y += 25
+        y += 8
+        info = [when(game.start, game.time_tbd), game.note]
+        if game.detail and game.detail != title:
+            info.append(game.detail)
+        if game.tv:
+            info.append("TV: " + game.tv)
+        info.extend(_odds_bits(game, game.abbr, ctx.cfg, _sport(row), full=True))
+        for line in wrap(d, " · ".join(dict.fromkeys(bit for bit in info if bit)), F("m", 17), width, max(1, int((h - 70 - y) / 20))):
+            text(d, (x, y), line, F("m", 17))
+            y += 20
+    if row.news:
+        d.line((14, h - 62, w - 14, h - 62), fill=INK, width=1)
+        for i, line in enumerate(wrap(d, "» " + row.news, F("cm", 17), w - 28, 2)):
+            text(d, (14, h - 50 + i * 20), line, F("cm", 17))
     return c
 
+
+def detail_sports(ctx, size):
+    import sources
+    c, d = canvas(size)
+    w, h = size
+    rows = {row.key: row for row in ctx.teams}
+    order = ("india_men", "man_utd", "cal_fb", "f1")
+    teams = [rows.get(key) or sources.TeamRow(key=key, label=sources.TEAMS[key][0]) for key in order]
+    focus = ctx.cfg.get("sports_focus")
+    if focus in order:
+        return _sports_focus(ctx, size, teams[order.index(focus)])
+    rh = h / len(teams)
+    for i, row in enumerate(teams):
+        y = int(i * rh)
+        if i:
+            dotted(d, 12, w - 12, y, 3)
+        has_logo = paste_logo(c, row.logo, 12, y + 15, 34, ctx.cfg)
+        tx = 54 if has_logo else 14
+        for j, line in enumerate(wrap(d, row.label.upper(), F("cb", 22), 184 - tx, 2)):
+            text(d, (tx, y + 14 + j * 24), line, F("cb", 22))
+        if row.record:
+            text(d, (tx, y + 66), row.record, F("cm", 16))
+        x, width = 202, 284
+        game = row.live or row.last
+        if game:
+            title = _sports_game_title(row, game)
+            font = F("cm", 17) if row.key == "india_men" else F("sb", 21)
+            lines = wrap(d, title, font, width, 3 if row.key == "india_men" else 2)
+            line_h = 19 if row.key == "india_men" else 23
+            for j, line in enumerate(lines):
+                text(d, (x, y + 12 + j * line_h), line, font)
+            label = "LIVE" if row.live else when(game.start, game.time_tbd)
+            text(d, (x, y + 71), ellipsize(d, label, F("cm", 16), width), F("cm", 16))
+        else:
+            text(d, (x, y + 18), "No recent result in feed", F("m", 17))
+        if row.news and row.key not in ("india_men", "f1"):
+            text(d, (x, y + 89), ellipsize(d, "» " + row.news, F("cm", 13), width), F("cm", 13))
+        x, width = 514, w - 528
+        text(d, (x, y + 9), "NEXT", F("cb", 15))
+        game = row.next
+        if not game:
+            text(d, (x, y + 32), "No upcoming event in feed", F("m", 17))
+            continue
+        paste_logo(c, game.opp_logo, w - 40, y + 4, 24, ctx.cfg)
+        prefix = "" if row.key == "f1" else "vs " if game.home else "at "
+        title = when(game.start, game.time_tbd) + " · " + prefix + game.opp_name
+        for j, line in enumerate(wrap(d, title, F("sb", 19), width, 2)):
+            text(d, (x, y + 29 + j * 22), line, F("sb", 19))
+        info = [game.tv] + _odds_bits(game, game.abbr, ctx.cfg, _sport(row), full=True)
+        for j, line in enumerate(wrap(d, " · ".join(bit for bit in info if bit), F("cm", 14), width, 2)):
+            text(d, (x, y + 75 + j * 16), line, F("cm", 14))
+    return c
 
 def detail_crypto(ctx, size):
     c, d = canvas(size)

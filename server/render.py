@@ -299,8 +299,8 @@ class Sighting:
     dest: str
     origin_city: str
     dest_city: str
-    alt_ft: int
-    speed_kt: float
+    alt_ft: int | None
+    speed_kt: float | None
     dist_nm: float
     elev_deg: float
     seen_at: float
@@ -331,6 +331,7 @@ class Ctx:
     crypto: object = None         # CoinGecko snapshot (sources.Crypto)
     teams: list = field(default_factory=list)
     featured: object = None       # sky Sighting
+    tracked: object = None        # selected-flight snapshot; never fetched by render
     recent: list = field(default_factory=list)
     day_count: int = 0
     nearby: list = field(default_factory=list)
@@ -1355,7 +1356,52 @@ def detail_crypto(ctx, size):
     return c
 
 
+def detail_flight(ctx, size):
+    c, d = canvas(size)
+    w, h = size
+    track = ctx.tracked
+    s = track.sighting
+    title = track.query + (" · " + track.callsign if track.callsign and track.callsign != track.query else "")
+    text(d, (14, 12), title, F("cb", 30))
+    state = "LIVE POSITION" if track.status == "live" else "LAST KNOWN · FEED ERROR" if s else "LOOKUP UNAVAILABLE" if track.error else "NO LIVE POSITION"
+    text(d, (w - 14, 20), state, F("cm", 16), anchor="ra")
+    d.line((14, 55, w - 14, 55), fill=INK, width=1)
+    if not s:
+        message = "Flight lookup is temporarily unavailable" if track.error else "No live position in the ADS-B feed"
+        text(d, (14, 89), message, F("sb", 24))
+        notes = ("Try again shortly, or enter the aircraft's ICAO callsign." if track.error else
+                 "The flight may be on the ground, outside receiver coverage, or using a different callsign. This does not confirm a cancellation or arrival.")
+        for i, line in enumerate(wrap(d, notes, F("m", 19), w - 28, 4)):
+            text(d, (14, 138 + i * 24), line, F("m", 19))
+    else:
+        text(d, (14, 72), ellipsize(d, s.airline or s.callsign, F("sb", 22), w - 28), F("sb", 22))
+        route = f"{s.origin} → {s.dest}" if s.has_route else "Route not verified"
+        text(d, (14, 108), route, F("cb", 32))
+        cities = " → ".join(filter(None, (s.origin_city, s.dest_city)))
+        text(d, (14, 150), ellipsize(d, cities, F("m", 18), w - 28), F("m", 18))
+        text(d, (14, 185), ellipsize(d, s.aircraft, F("cm", 18), w - 28), F("cm", 18))
+        for x, label, value in ((14, "ALTITUDE", f"{s.alt_ft:,} ft" if s.alt_ft is not None else "Unavailable"),
+                                 (275, "GROUND SPEED", f"{s.speed_kt:.0f} kt" if s.speed_kt is not None else "Unavailable"),
+                                 (536, "FROM SINGAPORE" if ctx.cfg.get("city") == "Singapore" else "FROM HOME", f"{s.dist_nm:,.0f} nm")):
+            text(d, (x, 228), label, F("cm", 15))
+            text(d, (x, 251), value, F("sb", 25))
+        seen = "Last position " + hm(s.seen_at)
+        if s.eta_min is not None and track.status == "live":
+            seen += f" · Estimated remaining {s.eta_min} min (not scheduled ETA)"
+        text(d, (14, 305), ellipsize(d, seen, F("cm", 17), w - 28), F("cm", 17))
+        if s.progress is not None:
+            d.line((14, 337, w - 14, 337), fill=INK, width=1)
+            px = 14 + int((w - 28) * max(0, min(1, s.progress)))
+            d.ellipse((px - 4, 333, px + 4, 341), fill=INK)
+    d.line((14, h - 52, w - 14, h - 52), fill=INK, width=1)
+    text(d, (14, h - 39), "ADS-B · adsb.lol / adsbdb · coverage is not guaranteed", F("cm", 16))
+    text(d, (14, h - 18), "Checked " + hm(track.checked_at), F("cm", 14))
+    return c
+
+
 def detail_sky(ctx, size):
+    if ctx.tracked is not None:
+        return detail_flight(ctx, size)
     c, d = canvas(size)
     w, h = size
     radius = ctx.cfg.get("radar_nm", 25)

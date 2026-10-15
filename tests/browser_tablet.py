@@ -46,14 +46,15 @@ def start_fixture_server():
                     self.send_error(400)
                     return
                 name=query.get('page',['quad'])[0]
-                version='4470:'+name+(':'+ (sport or 'all') if name=='sports' else '')
+                flight=query.get('flight',[''])[0]
+                version='4470:'+name+(':'+ (sport or 'all') if name=='sports' else ':'+flight if flight else '')
                 headers={'X-Version':version}
                 if query.get('v')==[version]:
                     self.send_response(204)
                     self.send_header('X-Version',version)
                     self.end_headers()
                     return
-                content,mime=png(255 if sport is None else 190+sports.index(sport)*10),'image/png'
+                content,mime=png(180 if flight else 255 if sport is None else 190+sports.index(sport)*10),'image/png'
             else:
                 self.send_error(404)
                 return
@@ -294,6 +295,45 @@ with sync_playwright() as p:
     page.wait_for_function('document.querySelector("#status").innerText.includes("last display retained")')
     checks.append('offline API reload recovers IndexedDB frame')
     page.unroute('**/api/tablet/**')
+    page.evaluate("navigate('sky')")
+    wait_frame('sky')
+    wake()
+    page.locator('#flight-open').click()
+    page.locator('#flight-input').fill('<bad>')
+    page.locator('#flight-form button[type=submit]').click()
+    assert page.locator('#flight-dialog').evaluate('(e)=>e.open')
+    assert page.locator('#flight-error').inner_text()
+    page.keyboard.press('ArrowRight')
+    assert page.evaluate("page==='sky'")
+    page.locator('#flight-input').fill('sq 321')
+    page.locator('#flight-input').press('Enter')
+    wait_frame('sky/SQ321')
+    assert page.locator('.frame').get_attribute('alt').startswith('Sky · SQ321')
+    assert page.evaluate("localStorage.getItem('quad-flight')")=='SQ321'
+    page.reload(wait_until='networkidle')
+    wait_frame('sky/SQ321')
+    wake()
+    page.locator('#flight-open').click()
+    assert page.locator('#flight-input').input_value()=='SQ321'
+    page.locator('#flight-input').fill('EK203')
+    page.locator('#flight-form button[type=submit]').click()
+    wait_frame('sky/EK203')
+    assert page.evaluate("frames.has('sky/SQ321')&&frames.has('sky/EK203')")
+    page.route('**/api/tablet/**',lambda route:route.abort())
+    page.reload(wait_until='networkidle')
+    wait_frame('sky/EK203')
+    page.wait_for_function('document.querySelector("#status").innerText.includes("last display retained")')
+    page.unroute('**/api/tablet/**')
+    wake()
+    page.locator('#flight-open').click()
+    page.locator('#flight-clear').click()
+    wait_frame('sky')
+    assert page.evaluate("localStorage.getItem('quad-flight')")==''
+    tracked_requests=[q for _,q in api_requests if 'flight' in q]
+    assert {q['flight'][0] for q in tracked_requests}=={'SQ321','EK203'}
+    assert all(q.get('page')==['sky'] and q.get('k')==['local-test'] for q in tracked_requests)
+    checks.append('flight entry validation, IATA normalization, device persistence, independent caches, offline reload and clear to nearby')
+    page.screenshot(path=str(ROOT/'flight-controls.png'))
     page.evaluate('''()=>{window.fetch=(_url,options)=>new Promise((_resolve,reject)=>{options.signal.addEventListener('abort',()=>reject(new DOMException('Injected stalled request','AbortError')),{once:true});});}''')
     wake()
     page.locator('#reload').click()

@@ -694,12 +694,28 @@ class H(BaseHTTPRequestHandler):
                 sport = self.q().get("sport", "")
                 if sport and (page != "sports" or sport not in ("india_men", "man_utd", "cal_fb", "f1")):
                     return self.send(400, {"error": "invalid sport"})
+                tracked = None
+                flight = self.q().get("flight", "")
+                if flight:
+                    if page != "sky":
+                        return self.send(400, {"error": "flight is only valid on Sky"})
+                    import flighttrack
+                    try:
+                        flight = flighttrack.normalize_flight(flight)
+                    except ValueError:
+                        return self.send(400, {"error": "invalid flight number"})
+                    # Lookup is cached and must not hold the board's render lock.
+                    if flight:
+                        tracked = flighttrack.track_flight(flight, cfg["lat"], cfg["lon"])
                 with board.cond:
                     version = (f"{board.version}:sports:{sport or 'all'}"
-                               if page == "sports" else board.version)
+                               if page == "sports" else
+                               f"{board.version}:sky:{flight}:{tracked.checked_at}:{tracked.status}"
+                               if tracked is not None else board.version)
                     if self.q().get("v") == str(version):
                         return self.send(204, b"", headers={"X-Version": version})
                     ctx = board.ctx(page=page)
+                    ctx.tracked = tracked
                     ctx.cfg = {**ctx.cfg, "tablet_mode": True, "sports_focus": sport}
                     img = R.compose(ctx)
                 return self.png(img, {"X-Version": version})
